@@ -48,11 +48,16 @@ neural_exploration/
 - **Utah Array**: 96-channel electrode layout visualization
 - **Neural Data**: Multi-channel signal overview and structure analysis
 - **Data Quality**: RMS, correlation, and power spectrum analysis
+- **Trial Analysis**: Individual trial visualization with joystick velocity
+- **Multi-Trial Summary**: Comparative analysis across multiple trials
 
 ### Main Notebook (`neural_exploration.ipynb`)
 - **Step-by-step exploration**: Guided analysis workflow
 - **Interactive visualizations**: Comprehensive plots and summaries
 - **Data characterization**: Signal quality and structure assessment
+- **Individual trial analysis**: Detailed joystick velocity and target visualization
+- **Multi-trial comparisons**: Statistical analysis across trials
+- **Helper functions**: Easy trial selection and analysis tools
 - **Next steps guidance**: Clear path for detailed analysis
 
 ## Dependencies
@@ -116,8 +121,14 @@ behavioral_data = loader.load_behavioral_data()
 from utils.visualization import BehavioralVisualizer, NeuralVisualizer
 
 # Behavioral task layout
-behav_viz = BehavioralVisualizer()
+behav_viz = BehavioralVisualizer(behavioral_data)
 fig = behav_viz.plot_center_out_layout()
+
+# Individual trial analysis
+fig = behav_viz.plot_trial_behavioral_data(trial_num=5)
+
+# Multi-trial summary
+fig = behav_viz.plot_all_trials_summary(max_trials=10)
 
 # Neural data overview
 neural_viz = NeuralVisualizer(neural_data, metadata)

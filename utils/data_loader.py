@@ -42,7 +42,7 @@ class DataLoader:
         
     def load_behavioral_data(self, csv_file_path=None):
         """
-        Load behavioral data from CSV file.
+        Load behavioral data from CSV file and segment trials.
         
         Parameters:
         -----------
@@ -52,7 +52,7 @@ class DataLoader:
         Returns:
         --------
         pandas.DataFrame
-            Behavioral data with proper timestamps
+            Behavioral data with proper timestamps and trial segmentation
         """
         if csv_file_path is None:
             csv_file_path = self.csv_file_path
@@ -71,15 +71,138 @@ class DataLoader:
                     errors='coerce'
                 )
             
+            # Segment trials based on trial_start and trial_win/trial_lose flags
+            self.behavioral_data = self._segment_trials(self.behavioral_data)
+            
             print(f"Behavioral data loaded successfully!")
             print(f"Shape: {self.behavioral_data.shape}")
             print(f"Columns: {list(self.behavioral_data.columns)}")
+            
+            # Report trial segmentation results
+            if 'trial' in self.behavioral_data.columns:
+                n_trials = self.behavioral_data['trial'].nunique()
+                print(f"Trials segmented: {n_trials} trials identified")
+                
+                # Show trial outcomes
+                if 'trial_outcome' in self.behavioral_data.columns:
+                    outcomes = self.behavioral_data.groupby('trial')['trial_outcome'].first().value_counts()
+                    print(f"Trial outcomes: {dict(outcomes)}")
             
             return self.behavioral_data
             
         except Exception as e:
             print(f"Error loading behavioral data: {e}")
             return None
+    
+    def _segment_trials(self, data):
+        """
+        Segment trials based on trial_start and trial_win/trial_lose flags.
+        
+        Trial Definition Heuristic:
+        - Start: First row where trial_start == True
+        - End: First subsequent row where trial_win == True OR trial_lose == True
+        
+        This assumes:
+        - trial_start flags the beginning of a trial (center hold or cue presentation)
+        - trial_win or trial_lose marks behavioral resolution
+        
+        Parameters:
+        -----------
+        data : pandas.DataFrame
+            Raw behavioral data with columns:
+            - trial_start: Boolean flag for trial beginnings
+            - trial_win: Boolean flag for successful trial endings
+            - trial_lose: Boolean flag for failed trial endings
+            
+        Returns:
+        --------
+        pandas.DataFrame
+            Data with added columns:
+            - trial: Trial numbers (1 to N)
+            - trial_outcome: 'win', 'lose', or 'incomplete'
+        """
+        # Make a copy to avoid modifying original data
+        data = data.copy()
+        
+        # Initialize trial-related columns
+        data['trial'] = -1
+        data['trial_outcome'] = 'unknown'
+        
+        # Check for required columns
+        required_cols = ['trial_start']
+        outcome_cols = ['trial_win', 'trial_lose']
+        
+        if not all(col in data.columns for col in required_cols):
+            print(f"Warning: Missing required columns for trial segmentation: {required_cols}")
+            return data
+            
+        if not any(col in data.columns for col in outcome_cols):
+            print(f"Warning: Missing outcome columns for trial segmentation: {outcome_cols}")
+            return data
+        
+        # Find trial start and end points
+        trial_starts = data.index[data['trial_start'] == True].tolist()
+        
+        if len(trial_starts) == 0:
+            print("Warning: No trial start markers found")
+            return data
+        
+        print(f"Found {len(trial_starts)} trial start markers")
+        
+        # Segment each trial
+        current_trial = 0
+        
+        for i, start_idx in enumerate(trial_starts):
+            current_trial += 1
+            
+            # Find the end of this trial
+            if i + 1 < len(trial_starts):
+                # Look for trial end before next trial start
+                search_end = trial_starts[i + 1]
+            else:
+                # Last trial - search to end of data
+                search_end = len(data)
+            
+            # Look for trial_win or trial_lose in this range
+            trial_segment = data.iloc[start_idx:search_end]
+            
+            # Find trial outcome
+            win_indices = trial_segment.index[trial_segment.get('trial_win', False) == True]
+            lose_indices = trial_segment.index[trial_segment.get('trial_lose', False) == True]
+            
+            # Determine trial end and outcome
+            if len(win_indices) > 0 and len(lose_indices) > 0:
+                # Both win and lose flags - take the first one
+                first_win = win_indices[0] if len(win_indices) > 0 else float('inf')
+                first_lose = lose_indices[0] if len(lose_indices) > 0 else float('inf')
+                
+                if first_win < first_lose:
+                    end_idx = first_win
+                    outcome = 'win'
+                else:
+                    end_idx = first_lose
+                    outcome = 'lose'
+            elif len(win_indices) > 0:
+                end_idx = win_indices[0]
+                outcome = 'win'
+            elif len(lose_indices) > 0:
+                end_idx = lose_indices[0]
+                outcome = 'lose'
+            else:
+                # No clear end - extend to next trial start or end of data
+                end_idx = search_end - 1
+                outcome = 'incomplete'
+            
+            # Assign trial number and outcome to this segment
+            data.loc[start_idx:end_idx, 'trial'] = current_trial
+            data.loc[start_idx:end_idx, 'trial_outcome'] = outcome
+        
+        # Remove rows that aren't part of any trial
+        data = data[data['trial'] != -1].copy()
+        
+        print(f"Trial segmentation complete: {current_trial} trials identified")
+        
+        return data
     
     def load_neural_data_neo(self, ns6_file_path=None):
         """
