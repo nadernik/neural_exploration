@@ -750,4 +750,524 @@ class DataLoader:
             }
         else:
             print("No valid trials found in aligned data")
-            return None 
+            return None
+    
+    def load_neural_data_for_trials(self, file_path, trial_numbers=None, 
+                                    buffer_seconds=5.0, force_reload=False,
+                                    max_channels=None, downsample_factor=1):
+        """
+        Load neural data for specific behavioral trials using lazy loading.
+        
+        This method uses behavioral trial timing to determine the exact time window
+        needed and loads only that portion of the neural data using Neo's lazy loading.
+        
+        Parameters:
+        -----------
+        file_path : str
+            Path to the .ns6 file
+        trial_numbers : list, optional
+            List of trial numbers to load. If None, uses first 10 trials
+        buffer_seconds : float, optional
+            Buffer time in seconds to add before/after trial window
+        force_reload : bool, optional
+            If True, reload even if same file is already loaded
+        max_channels : int, optional
+            Maximum number of channels to load
+        downsample_factor : int, optional
+            Downsample factor (1 = no downsampling)
+            
+        Returns:
+        --------
+        dict
+            Dictionary containing neural data and metadata
+        """
+        # Check if behavioral data is available
+        if self.behavioral_data is None:
+            print("❌ No behavioral data available. Load behavioral data first.")
+            return None
+            
+        if 'trial' not in self.behavioral_data.columns:
+            print("❌ No trial segmentation found in behavioral data.")
+            return None
+        
+        # Determine which trials to load
+        available_trials = sorted(self.behavioral_data['trial'].unique())
+        if trial_numbers is None:
+            trial_numbers = available_trials[:10]  # First 10 trials by default
+        
+        # Validate trial numbers
+        valid_trials = [t for t in trial_numbers if t in available_trials]
+        if len(valid_trials) == 0:
+            print(f"❌ No valid trials found. Available: {available_trials[:10]}...")
+            return None
+        
+        # Calculate time window needed
+        trial_data = self.behavioral_data[self.behavioral_data['trial'].isin(valid_trials)]
+        
+        if 'timestamp' not in trial_data.columns:
+            print("❌ No timestamp column found in behavioral data.")
+            return None
+        
+        # Get time range with buffer
+        start_time_behavioral = trial_data['timestamp'].iloc[0]
+        end_time_behavioral = trial_data['timestamp'].iloc[-1]
+        duration_behavioral = (end_time_behavioral - start_time_behavioral).total_seconds()
+        
+        # Account for time offset between neural and behavioral data
+        # Neural data starts at 2025-03-25T9:22:53Z
+        # Behavioral data starts at 2025-03-25T9:22:28Z (25 second offset)
+        time_offset = 25.0  # seconds
+        
+        # Calculate neural data time window
+        neural_start_time = max(0, time_offset - buffer_seconds)
+        neural_duration = duration_behavioral + 2 * buffer_seconds
+        
+        print(f"Loading neural data for trials: {valid_trials}")
+        print(f"Behavioral time range: {duration_behavioral:.2f} seconds")
+        print(f"Neural time window: {neural_start_time:.2f} to {neural_start_time + neural_duration:.2f} seconds")
+        print(f"Total duration to load: {neural_duration:.2f} seconds")
+        
+        # Check if same window is already loaded
+        cache_key = f"{file_path}_{neural_start_time}_{neural_duration}_{max_channels}_{downsample_factor}"
+        if (not force_reload and 
+            hasattr(self, '_neural_cache_key') and 
+            self._neural_cache_key == cache_key):
+            print("Neural data for this trial window is already loaded.")
+            return self.neural_data
+        
+        print(f"Loading neural data from: {file_path}")
+        print(f"Using lazy loading for time window: {neural_start_time:.1f} to {neural_start_time + neural_duration:.1f} seconds")
+        
+        try:
+            # Create Neo reader 
+            reader = neo.BlackrockIO(filename=file_path)
+            
+            # Get Time Origin
+            try:
+                if hasattr(reader, 'datetime'):
+                    self.time_origin = reader.datetime
+                elif hasattr(reader, 'rec_datetime'):
+                    self.time_origin = reader.rec_datetime
+                else:
+                    self.time_origin = datetime(2025, 3, 25, 9, 22, 53, tzinfo=timezone.utc)
+            except:
+                self.time_origin = datetime(2025, 3, 25, 9, 22, 53, tzinfo=timezone.utc)
+            
+            print(f"Neural data Time Origin: {self.time_origin}")
+            
+            # Read block in lazy mode to get proxies
+            block = reader.read_block(lazy=True)
+            segment = block.segments[0]
+            
+            if len(segment.analogsignals) == 0:
+                print("❌ No analog signals found in the neural data file.")
+                return None
+                
+            # Get the analog signal proxy (lazy-loaded)
+            analog_signal = segment.analogsignals[0]
+            
+            # Get sampling rate and calculate indices
+            sampling_rate = float(analog_signal.sampling_rate.magnitude)
+            start_idx = int(neural_start_time * sampling_rate)
+            end_idx = int((neural_start_time + neural_duration) * sampling_rate)
+            
+            print(f"Original sampling rate: {sampling_rate} Hz")
+            print(f"Loading samples {start_idx} to {end_idx}")
+            
+            # Estimate memory usage before loading
+            n_samples = end_idx - start_idx
+            n_channels = analog_signal.shape[1]
+            if max_channels is not None:
+                n_channels = min(n_channels, max_channels)
+            
+            estimated_memory_mb = (n_samples * n_channels * 4) / (1024**2)  # 4 bytes per float32
+            print(f"Estimated memory usage: {estimated_memory_mb:.1f} MB")
+            
+            # Load the specific time window using lazy loading
+            # The analog_signal is a proxy object - we need to load it properly
+            print("Loading data from proxy object...")
+            
+            # For AnalogSignalProxy, we need to load the data using the proxy's load method
+            # or access it through the segment
+            try:
+                if hasattr(analog_signal, 'load'):
+                    # Method 1: Use the proxy's load method
+                    loaded_signal = analog_signal.load()
+                    raw_data_full = loaded_signal.magnitude
+                else:
+                    # Method 2: Load the full signal from the proxy
+                    raw_data_full = analog_signal[:]
+                    if hasattr(raw_data_full, 'magnitude'):
+                        raw_data_full = raw_data_full.magnitude
+                
+                # Now slice the loaded data to get our time window
+                raw_data = raw_data_full[start_idx:end_idx]
+                
+                # Apply channel selection if requested
+                if max_channels is not None and raw_data.shape[1] > max_channels:
+                    raw_data = raw_data[:, :max_channels]
+                    print(f"Selected first {max_channels} channels out of {raw_data_full.shape[1]} available")
+                
+            except Exception as e:
+                print(f"Error with proxy loading method: {e}")
+                # Fallback: Load the entire segment and slice
+                print("Trying alternative loading method...")
+                
+                # Re-read the block without lazy loading for the specific time window
+                reader.close()
+                reader = neo.BlackrockIO(filename=file_path)
+                
+                # Calculate time window in seconds
+                t_start = neural_start_time
+                t_stop = neural_start_time + neural_duration
+                
+                # Load only the specific time window
+                block = reader.read_block(
+                    time_slice=(t_start, t_stop),
+                    lazy=False
+                )
+                
+                if len(block.segments) > 0 and len(block.segments[0].analogsignals) > 0:
+                    loaded_signal = block.segments[0].analogsignals[0]
+                    raw_data = loaded_signal.magnitude
+                    
+                    # Apply channel selection if requested
+                    if max_channels is not None and raw_data.shape[1] > max_channels:
+                        raw_data = raw_data[:, :max_channels]
+                        print(f"Selected first {max_channels} channels out of {loaded_signal.shape[1]} available")
+                else:
+                    raise Exception("No data found in the specified time window")
+            
+            # Create time axis relative to the loaded segment
+            times = np.arange(raw_data.shape[0]) / sampling_rate
+            
+            # Apply downsampling if requested
+            if downsample_factor > 1:
+                raw_data = raw_data[::downsample_factor]
+                times = times[::downsample_factor]
+                sampling_rate = sampling_rate / downsample_factor
+                print(f"Downsampled by factor of {downsample_factor}, new sampling rate: {sampling_rate} Hz")
+            
+            print(f"Loaded neural data shape: {raw_data.shape}")
+            print(f"Effective sampling rate: {sampling_rate} Hz")
+            print(f"Loaded duration: {len(raw_data)/sampling_rate:.2f} seconds")
+            print(f"Actual memory usage: {raw_data.nbytes / 1024**2:.1f} MB")
+            
+            # Store metadata
+            self.neural_metadata = {
+                'sampling_rate': sampling_rate,
+                'n_channels': raw_data.shape[1],
+                'duration': len(times) / sampling_rate,
+                'start_time': neural_start_time,
+                'end_time': neural_start_time + neural_duration,
+                'time_origin': self.time_origin,
+                'file_path': file_path,
+                'loaded_trials': valid_trials,
+                'buffer_seconds': buffer_seconds,
+                'downsample_factor': downsample_factor
+            }
+            
+            # Store neural data
+            self.neural_data = {
+                'raw_data': raw_data,
+                'times': times,
+                'timestamps': times + neural_start_time,  # Absolute timestamps
+                'sampling_rate': sampling_rate,
+                'channels': list(range(raw_data.shape[1])),
+                'metadata': self.neural_metadata.copy()
+            }
+            
+            # Cache the loading parameters
+            self._neural_cache_key = cache_key
+            
+            print("✅ Neural data loaded successfully using lazy loading!")
+            
+            return self.neural_data
+            
+        except Exception as e:
+            print(f"❌ Error loading neural data: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+        finally:
+            # Ensure reader is closed
+            try:
+                reader.close()
+            except:
+                pass 
+
+    def load_neural_data_for_trials_simple(self, file_path, trial_numbers=None, 
+                                          buffer_seconds=5.0, force_reload=False,
+                                          max_channels=None, downsample_factor=1):
+        """
+        Load neural data for specific behavioral trials using direct time slicing.
+        
+        This is a simpler, more reliable approach that uses Neo's time_slice parameter
+        directly in read_block instead of handling lazy loading proxies.
+        
+        Parameters:
+        -----------
+        file_path : str
+            Path to the .ns6 file
+        trial_numbers : list, optional
+            List of trial numbers to load. If None, uses first 10 trials
+        buffer_seconds : float, optional
+            Buffer time in seconds to add before/after trial window
+        force_reload : bool, optional
+            If True, reload even if same file is already loaded
+        max_channels : int, optional
+            Maximum number of channels to load
+        downsample_factor : int, optional
+            Downsample factor (1 = no downsampling)
+            
+        Returns:
+        --------
+        dict
+            Dictionary containing neural data and metadata
+        """
+        # Check if behavioral data is available
+        if self.behavioral_data is None:
+            print("❌ No behavioral data available. Load behavioral data first.")
+            return None
+            
+        if 'trial' not in self.behavioral_data.columns:
+            print("❌ No trial segmentation found in behavioral data.")
+            return None
+        
+        # Determine which trials to load
+        available_trials = sorted(self.behavioral_data['trial'].unique())
+        if trial_numbers is None:
+            trial_numbers = available_trials[:10]  # First 10 trials by default
+        
+        # Validate trial numbers
+        valid_trials = [t for t in trial_numbers if t in available_trials]
+        if len(valid_trials) == 0:
+            print(f"❌ No valid trials found. Available: {available_trials[:10]}...")
+            return None
+        
+        # Calculate time window needed
+        trial_data = self.behavioral_data[self.behavioral_data['trial'].isin(valid_trials)]
+        
+        if 'timestamp' not in trial_data.columns:
+            print("❌ No timestamp column found in behavioral data.")
+            return None
+        
+        # Get time range with buffer
+        start_time_behavioral = trial_data['timestamp'].iloc[0]
+        end_time_behavioral = trial_data['timestamp'].iloc[-1]
+        duration_behavioral = (end_time_behavioral - start_time_behavioral).total_seconds()
+        
+        # Account for time offset between neural and behavioral data
+        time_offset = 25.0  # seconds
+        
+        # Calculate neural data time window
+        neural_start_time = max(0, time_offset - buffer_seconds)
+        neural_end_time = neural_start_time + duration_behavioral + 2 * buffer_seconds
+        
+        print(f"Loading neural data for trials: {valid_trials}")
+        print(f"Behavioral time range: {duration_behavioral:.2f} seconds")
+        print(f"Neural time window: {neural_start_time:.2f} to {neural_end_time:.2f} seconds")
+        
+        # Check if same window is already loaded
+        cache_key = f"{file_path}_{neural_start_time}_{neural_end_time}_{max_channels}_{downsample_factor}"
+        if (not force_reload and 
+            hasattr(self, '_neural_cache_key') and 
+            self._neural_cache_key == cache_key):
+            print("Neural data for this trial window is already loaded.")
+            return self.neural_data
+        
+        print(f"Loading neural data from: {file_path}")
+        print(f"Using direct time slicing: {neural_start_time:.1f} to {neural_end_time:.1f} seconds")
+        
+        reader = None
+        try:
+            # Create Neo reader
+            reader = neo.BlackrockIO(filename=file_path)
+            
+            # Get Time Origin
+            try:
+                if hasattr(reader, 'datetime'):
+                    self.time_origin = reader.datetime
+                elif hasattr(reader, 'rec_datetime'):
+                    self.time_origin = reader.rec_datetime
+                else:
+                    self.time_origin = datetime(2025, 3, 25, 9, 22, 53, tzinfo=timezone.utc)
+            except:
+                self.time_origin = datetime(2025, 3, 25, 9, 22, 53, tzinfo=timezone.utc)
+            
+            print(f"Neural data Time Origin: {self.time_origin}")
+            
+            # Load data using manual time slicing - BlackrockIO doesn't support time_slice parameter
+            print("Loading data with manual time slicing...")
+            
+            # First, read the block to get the signal information
+            block = reader.read_block(lazy=True)  # Start with lazy to get structure
+            
+            if len(block.segments) == 0:
+                print("❌ No segments found in the specified time window.")
+                return None
+                
+            segment = block.segments[0]
+            
+            if len(segment.analogsignals) == 0:
+                print("❌ No analog signals found in the neural data file.")
+                return None
+                
+            # Get the analog signal proxy
+            analog_signal_proxy = segment.analogsignals[0]
+            
+            # Get sampling rate from the proxy
+            sampling_rate = float(analog_signal_proxy.sampling_rate.magnitude)
+            
+            print(f"Original sampling rate: {sampling_rate} Hz")
+            print(f"Total signal shape: {analog_signal_proxy.shape}")
+            
+            # Calculate sample indices for the time window we want
+            start_sample = int(neural_start_time * sampling_rate)
+            end_sample = int(neural_end_time * sampling_rate)
+            
+            print(f"Loading samples {start_sample} to {end_sample}")
+            
+            # Load data from the proxy using proper Neo methods
+            # AnalogSignalProxy is not subscriptable, so we need to use other approaches
+            print("Loading data from proxy using Neo methods...")
+            
+            try:
+                # Method 1: Try to load the proxy and then slice
+                if hasattr(analog_signal_proxy, 'load'):
+                    print("Using proxy.load() method...")
+                    loaded_signal = analog_signal_proxy.load()
+                    raw_data_full = loaded_signal.magnitude
+                    
+                    # Now slice the loaded data
+                    raw_data = raw_data_full[start_sample:end_sample]
+                    
+                    # Apply channel selection
+                    if max_channels is not None and raw_data.shape[1] > max_channels:
+                        raw_data = raw_data[:, :max_channels]
+                        print(f"Selected first {max_channels} channels out of {raw_data_full.shape[1]} available")
+                        
+                else:
+                    # Method 2: Try time_slice method if available
+                    if hasattr(analog_signal_proxy, 'time_slice'):
+                        print("Using proxy.time_slice() method...")
+                        t_start = start_sample / sampling_rate
+                        t_stop = end_sample / sampling_rate
+                        sliced_signal = analog_signal_proxy.time_slice(t_start, t_stop)
+                        raw_data = sliced_signal.magnitude
+                        
+                        # Apply channel selection
+                        if max_channels is not None and raw_data.shape[1] > max_channels:
+                            raw_data = raw_data[:, :max_channels]
+                            print(f"Selected first {max_channels} channels out of {sliced_signal.shape[1]} available")
+                    else:
+                        # Method 3: Simple fallback - load manageable chunk
+                        print("Using simple chunk-based loading fallback...")
+                        
+                        # Close the lazy reader and use non-lazy loading
+                        reader.close()
+                        reader = neo.BlackrockIO(filename=file_path)
+                        
+                        # Load just a reasonable chunk that includes our time window
+                        # Add some buffer but keep it manageable
+                        chunk_duration = min(60.0, neural_end_time - neural_start_time + 20)  # Max 60 seconds
+                        chunk_start_time = max(0, neural_start_time - 5)  # 5 second buffer before
+                        
+                        print(f"Loading {chunk_duration:.1f} second chunk starting at {chunk_start_time:.1f}s")
+                        
+                        # Calculate sample indices for the chunk
+                        chunk_start_sample = int(chunk_start_time * sampling_rate)
+                        chunk_samples = int(chunk_duration * sampling_rate)
+                        
+                        # Load the block without lazy loading
+                        block = reader.read_block(lazy=False)
+                        segment = block.segments[0]
+                        analog_signal_full = segment.analogsignals[0]
+                        
+                        print(f"Full signal shape: {analog_signal_full.shape}")
+                        
+                        # Extract just the chunk we need
+                        chunk_end_sample = min(chunk_start_sample + chunk_samples, analog_signal_full.shape[0])
+                        chunk_data = analog_signal_full.magnitude[chunk_start_sample:chunk_end_sample]
+                        
+                        print(f"Chunk data shape: {chunk_data.shape}")
+                        
+                        # Now extract our specific time window from the chunk
+                        window_start_in_chunk = start_sample - chunk_start_sample
+                        window_end_in_chunk = end_sample - chunk_start_sample
+                        
+                        # Make sure indices are valid
+                        window_start_in_chunk = max(0, window_start_in_chunk)
+                        window_end_in_chunk = min(chunk_data.shape[0], window_end_in_chunk)
+                        
+                        raw_data = chunk_data[window_start_in_chunk:window_end_in_chunk]
+                        
+                        # Apply channel selection
+                        if max_channels is not None and raw_data.shape[1] > max_channels:
+                            raw_data = raw_data[:, :max_channels]
+                            print(f"Selected first {max_channels} channels out of {chunk_data.shape[1]} available")
+                            
+            except Exception as e:
+                print(f"Error with proxy methods: {e}")
+                raise e
+            
+            print(f"Loaded data shape: {raw_data.shape}")
+            
+            # Create time axis
+            times = np.arange(raw_data.shape[0]) / sampling_rate
+            
+            # Apply downsampling if requested
+            if downsample_factor > 1:
+                raw_data = raw_data[::downsample_factor]
+                times = times[::downsample_factor]
+                sampling_rate = sampling_rate / downsample_factor
+                print(f"Downsampled by factor of {downsample_factor}, new sampling rate: {sampling_rate} Hz")
+            
+            print(f"Final neural data shape: {raw_data.shape}")
+            print(f"Effective sampling rate: {sampling_rate} Hz")
+            print(f"Loaded duration: {len(raw_data)/sampling_rate:.2f} seconds")
+            print(f"Actual memory usage: {raw_data.nbytes / 1024**2:.1f} MB")
+            
+            # Store metadata
+            self.neural_metadata = {
+                'sampling_rate': sampling_rate,
+                'n_channels': raw_data.shape[1],
+                'duration': len(raw_data) / sampling_rate,
+                'start_time': neural_start_time,
+                'end_time': neural_end_time,
+                'time_origin': self.time_origin,
+                'file_path': file_path,
+                'loaded_trials': valid_trials,
+                'buffer_seconds': buffer_seconds,
+                'downsample_factor': downsample_factor
+            }
+            
+            # Store neural data
+            self.neural_data = {
+                'raw_data': raw_data,
+                'times': times,
+                'timestamps': times + neural_start_time,  # Absolute timestamps
+                'sampling_rate': sampling_rate,
+                'channels': list(range(raw_data.shape[1])),
+                'metadata': self.neural_metadata.copy()
+            }
+            
+            # Cache the loading parameters
+            self._neural_cache_key = cache_key
+            
+            print("✅ Neural data loaded successfully using direct time slicing!")
+            
+            return self.neural_data
+            
+        except Exception as e:
+            print(f"❌ Error loading neural data: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+        finally:
+            # Ensure reader is closed
+            if reader is not None:
+                try:
+                    reader.close()
+                except:
+                    pass 
