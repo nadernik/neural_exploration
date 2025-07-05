@@ -38,9 +38,11 @@ class DataLoader:
         self.csv_file_path = csv_file_path
         self.neural_data = None
         self.behavioral_data = None
-        self.metadata = {}
+        self.neural_metadata = {}
+        self.behavioral_metadata = {}
+        self.time_origin = None  # Global time reference from .ns6 file
         
-    def load_behavioral_data(self, csv_file_path=None):
+    def load_behavioral_data(self, csv_file_path=None, force_reload=False):
         """
         Load behavioral data from CSV file and segment trials.
         
@@ -48,6 +50,8 @@ class DataLoader:
         -----------
         csv_file_path : str, optional
             Path to CSV file. If None, uses self.csv_file_path
+        force_reload : bool, optional
+            If True, reload even if same file is already loaded
             
         Returns:
         --------
@@ -59,6 +63,20 @@ class DataLoader:
             
         if csv_file_path is None:
             raise ValueError("No CSV file path provided")
+        
+        # Check if same file is already loaded
+        if (not force_reload and 
+            self.behavioral_data is not None and 
+            self.behavioral_metadata.get('file_path') == csv_file_path):
+            print(f"Behavioral data from {csv_file_path} is already loaded.")
+            print(f"Skipping reload (use force_reload=True to reload anyway)")
+            print(f"Loaded data info:")
+            print(f"  - Shape: {self.behavioral_data.shape}")
+            print(f"  - Columns: {list(self.behavioral_data.columns)}")
+            if 'trial' in self.behavioral_data.columns:
+                n_trials = self.behavioral_data['trial'].nunique()
+                print(f"  - Trials: {n_trials}")
+            return self.behavioral_data
             
         try:
             # Load CSV data
@@ -70,6 +88,24 @@ class DataLoader:
                     self.behavioral_data['timestamp'], 
                     errors='coerce'
                 )
+                
+                # Store metadata including file path
+                first_timestamp = self.behavioral_data['timestamp'].iloc[0]
+                last_timestamp = self.behavioral_data['timestamp'].iloc[-1]
+                duration = (last_timestamp - first_timestamp).total_seconds()
+                
+                self.behavioral_metadata = {
+                    'first_timestamp': first_timestamp,
+                    'last_timestamp': last_timestamp,
+                    'duration': duration,
+                    'n_samples': len(self.behavioral_data),
+                    'file_path': csv_file_path
+                }
+            else:
+                self.behavioral_metadata = {
+                    'file_path': csv_file_path,
+                    'n_samples': len(self.behavioral_data)
+                }
             
             # Segment trials based on trial_start and trial_win/trial_lose flags
             self.behavioral_data = self._segment_trials(self.behavioral_data)
@@ -218,84 +254,115 @@ class DataLoader:
         
         return data
     
-    def load_neural_data_neo(self, ns6_file_path=None):
+    def load_neural_data(self, file_path, force_reload=False):
         """
-        Load neural data using Neo library.
+        Load neural data from .ns6 file using Neo.
         
         Parameters:
         -----------
-        ns6_file_path : str, optional
-            Path to .ns6 file. If None, uses self.ns6_file_path
+        file_path : str
+            Path to the .ns6 file
+        force_reload : bool, optional
+            If True, reload even if same file is already loaded
             
         Returns:
         --------
         dict
             Dictionary containing neural data and metadata
         """
-        if not NEO_AVAILABLE:
-            raise ImportError("Neo library not available")
-            
-        if ns6_file_path is None:
-            ns6_file_path = self.ns6_file_path
-            
-        if ns6_file_path is None:
-            raise ValueError("No .ns6 file path provided")
-            
+        # Check if same file is already loaded
+        if (not force_reload and 
+            self.neural_data is not None and 
+            self.neural_metadata.get('file_path') == file_path):
+            print(f"Neural data from {file_path} is already loaded.")
+            print(f"Skipping reload (use force_reload=True to reload anyway)")
+            print(f"Loaded data info:")
+            print(f"  - Shape: {self.neural_data['raw_data'].shape}")
+            print(f"  - Duration: {self.neural_metadata['duration']:.1f} seconds")
+            print(f"  - Channels: {self.neural_metadata['n_channels']}")
+            print(f"  - Sampling rate: {self.neural_metadata['sampling_rate']} Hz")
+            print(f"  - Time Origin: {self.time_origin}")
+            return self.neural_data
+        
+        print(f"Loading neural data from: {file_path}")
+        
         try:
-            # Load using Neo
-            reader = BlackrockIO(filename=ns6_file_path)
+            # Create Neo reader for Blackrock files
+            reader = neo.BlackrockIO(filename=file_path)
             
             # Read the data
             block = reader.read_block()
             
-            # Extract information
-            self.neural_data = {}
-            self.metadata = {}
+            # Extract the first segment (assuming single segment recording)
+            segment = block.segments[0]
             
-            # Get sampling rate and other metadata
-            for segment in block.segments:
-                for signal in segment.analogsignals:
-                    self.metadata['sampling_rate'] = float(signal.sampling_rate)
-                    self.metadata['n_channels'] = signal.shape[1]
-                    self.metadata['duration'] = float(signal.duration)
-                    self.metadata['t_start'] = float(signal.t_start)
-                    
-                    # Store the actual data
-                    self.neural_data['raw_data'] = signal.magnitude
-                    self.neural_data['times'] = signal.times
-                    self.neural_data['channel_names'] = [f'ch_{i:02d}' for i in range(signal.shape[1])]
-                    break
-                break
+            # Get analog signals (raw neural data)
+            analog_signals = segment.analogsignals
             
-            print(f"Neural data loaded successfully using Neo!")
-            print(f"Sampling rate: {self.metadata['sampling_rate']} Hz")
-            print(f"Number of channels: {self.metadata['n_channels']}")
-            print(f"Duration: {self.metadata['duration']:.2f} seconds")
-            print(f"Data shape: {self.neural_data['raw_data'].shape}")
-            
-            return self.neural_data
-            
+            if len(analog_signals) > 0:
+                # Get the main analog signal
+                raw_signal = analog_signals[0]
+                
+                # Extract data and metadata
+                raw_data = raw_signal.magnitude  # Raw voltage data
+                times = raw_signal.times.magnitude  # Time stamps
+                sampling_rate = float(raw_signal.sampling_rate.magnitude)
+                
+                # Get Time Origin from the reader metadata
+                if hasattr(reader, 'datetime'):
+                    self.time_origin = reader.datetime
+                elif hasattr(reader, 'rec_datetime'):
+                    self.time_origin = reader.rec_datetime
+                else:
+                    # Try to get from header
+                    try:
+                        if hasattr(reader, 'header'):
+                            self.time_origin = reader.header.get('datetime', None)
+                        elif hasattr(reader, '_read_header'):
+                            header = reader._read_header()
+                            self.time_origin = header.get('datetime', None)
+                    except:
+                        pass
+                
+                # If no time origin found, use a default
+                if self.time_origin is None:
+                    print("Warning: Could not extract Time Origin from .ns6 file. Using provided timestamp.")
+                    self.time_origin = datetime(2025, 3, 25, 9, 22, 53, tzinfo=timezone.utc)
+                
+                print(f"Neural data Time Origin: {self.time_origin}")
+                print(f"Neural data shape: {raw_data.shape}")
+                print(f"Sampling rate: {sampling_rate} Hz")
+                print(f"Duration: {len(times)/sampling_rate:.2f} seconds")
+                print(f"Number of channels: {raw_data.shape[1] if len(raw_data.shape) > 1 else 1}")
+                
+                # Store metadata
+                self.neural_metadata = {
+                    'sampling_rate': sampling_rate,
+                    'n_channels': raw_data.shape[1] if len(raw_data.shape) > 1 else 1,
+                    'duration': len(times) / sampling_rate,
+                    'time_origin': self.time_origin,
+                    'file_path': file_path
+                }
+                
+                # Store data
+                self.neural_data = {
+                    'raw_data': raw_data,
+                    'times': times,
+                    'sampling_rate': sampling_rate,
+                    'time_origin': self.time_origin
+                }
+                
+                print("Neural data loaded successfully!")
+                return self.neural_data
+                
+            else:
+                print("No analog signals found in the neural data file.")
+                return None
+                
         except Exception as e:
-            print(f"Error loading neural data with Neo: {e}")
+            print(f"Error loading neural data: {e}")
+            print("Make sure the Neo library is installed and the file format is supported.")
             return None
-    
-
-    
-    def load_neural_data(self, ns6_file_path=None):
-        """
-        Load neural data using Neo library.
-        
-        Parameters:
-        -----------
-        ns6_file_path : str, optional
-            Path to .ns6 file. If None, uses self.ns6_file_path
-            
-        Returns:
-        --------
-        dict
-            Dictionary containing neural data and metadata
-        """
-        return self.load_neural_data_neo(ns6_file_path)
     
     def get_data_info(self):
         """
@@ -309,7 +376,8 @@ class DataLoader:
         info = {
             'behavioral_data_loaded': self.behavioral_data is not None,
             'neural_data_loaded': self.neural_data is not None,
-            'metadata': self.metadata.copy() if self.metadata else {}
+            'neural_metadata': self.neural_metadata.copy() if self.neural_metadata else {},
+            'behavioral_metadata': self.behavioral_metadata.copy() if self.behavioral_metadata else {}
         }
         
         if self.behavioral_data is not None:
@@ -321,3 +389,248 @@ class DataLoader:
             info['neural_channels'] = len(self.neural_data['channel_names'])
             
         return info 
+
+    def align_timestamps(self):
+        """
+        Align behavioral and neural data timestamps using the neural Time Origin as reference.
+        
+        Returns:
+        --------
+        dict
+            Dictionary containing alignment information and aligned timestamps
+        """
+        if self.neural_data is None or self.behavioral_data is None:
+            print("Error: Both neural and behavioral data must be loaded first.")
+            return None
+        
+        if self.time_origin is None:
+            print("Error: No time origin available from neural data.")
+            return None
+        
+        print("Aligning behavioral and neural timestamps...")
+        
+        # Convert neural times to absolute timestamps
+        neural_start_time = self.time_origin
+        neural_times_absolute = [neural_start_time + pd.Timedelta(seconds=t) for t in self.neural_data['times']]
+        
+        # Get behavioral timestamps
+        if 'timestamp' in self.behavioral_data.columns:
+            behavioral_times = self.behavioral_data['timestamp']
+        else:
+            print("Error: No timestamp column found in behavioral data.")
+            return None
+        
+        # Calculate alignment offset
+        behavioral_start = behavioral_times.iloc[0]
+        neural_start = neural_times_absolute[0]
+        
+        # Time offset between the two data streams
+        time_offset = (behavioral_start - neural_start).total_seconds()
+        
+        print(f"Neural recording started at: {neural_start}")
+        print(f"Behavioral recording started at: {behavioral_start}")
+        print(f"Time offset: {time_offset:.3f} seconds")
+        print(f"Neural started {-time_offset:.1f} seconds {'before' if time_offset < 0 else 'after'} behavioral")
+        
+        # Convert all timestamps to seconds since neural time origin
+        behavioral_times_aligned = [(t - neural_start_time).total_seconds() for t in behavioral_times]
+        neural_times_aligned = list(self.neural_data['times'])
+        
+        # Add aligned timestamps to behavioral data
+        self.behavioral_data['timestamp_aligned'] = behavioral_times_aligned
+        
+        # Add aligned timestamps to neural data
+        self.neural_data['times_aligned'] = neural_times_aligned
+        
+        # Find overlapping time period
+        behavioral_start_sec = min(behavioral_times_aligned)
+        behavioral_end_sec = max(behavioral_times_aligned)
+        neural_start_sec = min(neural_times_aligned)
+        neural_end_sec = max(neural_times_aligned)
+        
+        overlap_start = max(behavioral_start_sec, neural_start_sec)
+        overlap_end = min(behavioral_end_sec, neural_end_sec)
+        overlap_duration = overlap_end - overlap_start
+        
+        print(f"Behavioral data spans: {behavioral_start_sec:.3f} to {behavioral_end_sec:.3f} seconds")
+        print(f"Neural data spans: {neural_start_sec:.3f} to {neural_end_sec:.3f} seconds")
+        print(f"Overlapping period: {overlap_start:.3f} to {overlap_end:.3f} seconds")
+        print(f"Overlap duration: {overlap_duration:.3f} seconds")
+        
+        alignment_info = {
+            'time_origin': self.time_origin,
+            'time_offset_seconds': time_offset,
+            'behavioral_start_aligned': behavioral_start_sec,
+            'behavioral_end_aligned': behavioral_end_sec,
+            'neural_start_aligned': neural_start_sec,
+            'neural_end_aligned': neural_end_sec,
+            'overlap_start': overlap_start,
+            'overlap_end': overlap_end,
+            'overlap_duration': overlap_duration,
+            'alignment_quality': 'good' if overlap_duration > 0 else 'poor'
+        }
+        
+        print(f"Alignment completed! Quality: {alignment_info['alignment_quality']}")
+        return alignment_info
+    
+    def get_overlapping_data(self, start_time=None, end_time=None):
+        """
+        Extract overlapping portions of behavioral and neural data.
+        
+        Parameters:
+        -----------
+        start_time : float, optional
+            Start time in seconds since neural time origin
+        end_time : float, optional
+            End time in seconds since neural time origin
+            
+        Returns:
+        --------
+        dict
+            Dictionary containing overlapping data portions
+        """
+        if 'timestamp_aligned' not in self.behavioral_data.columns:
+            print("Error: Data not aligned yet. Run align_timestamps() first.")
+            return None
+        
+        # Determine time range
+        if start_time is None or end_time is None:
+            # Find natural overlap
+            behavioral_times = self.behavioral_data['timestamp_aligned']
+            neural_times = self.neural_data['times_aligned']
+            
+            start_time = max(min(behavioral_times), min(neural_times))
+            end_time = min(max(behavioral_times), max(neural_times))
+        
+        print(f"Extracting overlapping data from {start_time:.3f} to {end_time:.3f} seconds")
+        
+        # Filter behavioral data
+        behavioral_mask = (
+            (self.behavioral_data['timestamp_aligned'] >= start_time) &
+            (self.behavioral_data['timestamp_aligned'] <= end_time)
+        )
+        behavioral_overlap = self.behavioral_data[behavioral_mask].copy()
+        
+        # Filter neural data
+        neural_mask = (
+            (self.neural_data['times_aligned'] >= start_time) &
+            (self.neural_data['times_aligned'] <= end_time)
+        )
+        neural_overlap = {
+            'raw_data': self.neural_data['raw_data'][neural_mask],
+            'times': self.neural_data['times'][neural_mask],
+            'times_aligned': np.array(self.neural_data['times_aligned'])[neural_mask],
+            'sampling_rate': self.neural_data['sampling_rate']
+        }
+        
+        print(f"Extracted {len(behavioral_overlap)} behavioral samples")
+        print(f"Extracted {len(neural_overlap['times'])} neural samples")
+        
+        return {
+            'behavioral_data': behavioral_overlap,
+            'neural_data': neural_overlap,
+            'time_range': (start_time, end_time),
+            'duration': end_time - start_time
+        }
+    
+    def convert_to_blackrock_ticks(self, timestamps):
+        """
+        Convert timestamps to Blackrock time ticks for precise alignment.
+        
+        Parameters:
+        -----------
+        timestamps : array-like
+            Timestamps in seconds since neural time origin
+            
+        Returns:
+        --------
+        numpy.ndarray
+            Timestamps in Blackrock time ticks (30 kHz clock)
+        """
+        # Blackrock systems typically use 30 kHz clock for timing
+        blackrock_clock_rate = 30000  # Hz
+        
+        # Convert seconds to ticks
+        ticks = np.array(timestamps) * blackrock_clock_rate
+        
+        return ticks.astype(np.int64)
+    
+    def segment_aligned_trials(self):
+        """
+        Segment trials using aligned timestamps.
+        
+        Returns:
+        --------
+        dict
+            Dictionary containing segmented trial data
+        """
+        if 'timestamp_aligned' not in self.behavioral_data.columns:
+            print("Error: Data not aligned yet. Run align_timestamps() first.")
+            return None
+        
+        print("Segmenting aligned trials...")
+        
+        # Use existing trial segmentation logic but with aligned timestamps
+        data = self.behavioral_data.copy()
+        
+        # Find trial boundaries
+        trial_starts = data[data['trial_start'] == True].index
+        trial_ends_win = data[data['trial_win'] == True].index
+        trial_ends_lose = data[data['trial_lose'] == True].index
+        
+        # Combine and sort all end points
+        all_ends = np.concatenate([trial_ends_win, trial_ends_lose])
+        all_ends = np.sort(all_ends)
+        
+        trials = []
+        trial_id = 0
+        
+        for start_idx in trial_starts:
+            # Find the next end point after this start
+            end_candidates = all_ends[all_ends > start_idx]
+            
+            if len(end_candidates) > 0:
+                end_idx = end_candidates[0]
+                
+                # Extract trial data
+                trial_data = data.iloc[start_idx:end_idx+1].copy()
+                trial_data['trial'] = trial_id
+                
+                # Determine outcome
+                if end_idx in trial_ends_win:
+                    trial_data['trial_outcome'] = 'win'
+                elif end_idx in trial_ends_lose:
+                    trial_data['trial_outcome'] = 'lose'
+                else:
+                    trial_data['trial_outcome'] = 'incomplete'
+                
+                trials.append(trial_data)
+                trial_id += 1
+        
+        if trials:
+            all_trials = pd.concat(trials, ignore_index=True)
+            print(f"Successfully segmented {len(trials)} aligned trials")
+            
+            # Add trial timing information
+            trial_info = []
+            for trial_num in range(len(trials)):
+                trial_data = trials[trial_num]
+                trial_info.append({
+                    'trial_id': trial_num,
+                    'start_time_aligned': trial_data['timestamp_aligned'].iloc[0],
+                    'end_time_aligned': trial_data['timestamp_aligned'].iloc[-1],
+                    'duration': trial_data['timestamp_aligned'].iloc[-1] - trial_data['timestamp_aligned'].iloc[0],
+                    'outcome': trial_data['trial_outcome'].iloc[0],
+                    'target_index': trial_data['target_index'].iloc[0] if 'target_index' in trial_data.columns else None
+                })
+            
+            trial_info_df = pd.DataFrame(trial_info)
+            
+            return {
+                'trial_data': all_trials,
+                'trial_info': trial_info_df,
+                'n_trials': len(trials)
+            }
+        else:
+            print("No valid trials found in aligned data")
+            return None 

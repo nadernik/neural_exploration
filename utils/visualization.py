@@ -419,14 +419,8 @@ class BehavioralVisualizer:
         
         # Compute and overlay trajectory if velocity data available
         if 'velocity_x' in trial_data.columns and 'velocity_y' in trial_data.columns and len(trial_data) > 1:
-            # Compute trajectory from velocity
+            # Compute trajectory from velocity (using the same simple method as multi-trial summary)
             dt = 1.0  # Default time step
-            if 'timestamp' in trial_data.columns and len(trial_data) > 1:
-                time_diffs = np.diff(pd.to_datetime(trial_data['timestamp']).values)
-                if len(time_diffs) > 0:
-                    dt = np.median(time_diffs) / np.timedelta64(1, 's')
-            
-            # Integrate velocity to get position (starting from center)
             pos_x = np.cumsum(trial_data['velocity_x'] * dt)
             pos_y = np.cumsum(trial_data['velocity_y'] * dt)
             
@@ -434,28 +428,36 @@ class BehavioralVisualizer:
             pos_x = pos_x - pos_x.iloc[0]
             pos_y = pos_y - pos_y.iloc[0]
             
-            # Scale trajectory to fit within the layout (targets are at radius 1.0)
-            max_pos = max(np.max(np.abs(pos_x)), np.max(np.abs(pos_y)))
-            if max_pos > 0:
-                scale_factor = 0.8 / max_pos  # Scale to fit within 80% of target radius
-                pos_x_scaled = pos_x * scale_factor
-                pos_y_scaled = pos_y * scale_factor
-            else:
-                pos_x_scaled = pos_x
-                pos_y_scaled = pos_y
-            
-            # Plot trajectory
-            ax3.plot(pos_x_scaled, pos_y_scaled, 'g-', linewidth=3, alpha=0.8, label='Trajectory')
+            # Plot trajectory (no scaling - let it show at natural size)
+            ax3.plot(pos_x, pos_y, 'g-', linewidth=3, alpha=0.8, label='Trajectory')
             
             # Mark start and end points
-            ax3.plot(pos_x_scaled.iloc[0], pos_y_scaled.iloc[0], 'go', markersize=8, 
+            ax3.plot(pos_x.iloc[0], pos_y.iloc[0], 'go', markersize=8, 
                     label='Start', markeredgecolor='darkgreen', markeredgewidth=2)
-            ax3.plot(pos_x_scaled.iloc[-1], pos_y_scaled.iloc[-1], 'ro', markersize=8, 
+            ax3.plot(pos_x.iloc[-1], pos_y.iloc[-1], 'ro', markersize=8, 
                     label='End', markeredgecolor='darkred', markeredgewidth=2)
+            
+            # Adjust axis limits dynamically to show both targets and trajectory
+            all_x = list(pos_x) + [info['x'] for info in self.center_out_targets.values()]
+            all_y = list(pos_y) + [info['y'] for info in self.center_out_targets.values()]
+            
+            x_range = max(all_x) - min(all_x)
+            y_range = max(all_y) - min(all_y)
+            
+            # Set limits with some padding
+            padding = 0.3
+            x_center = (max(all_x) + min(all_x)) / 2
+            y_center = (max(all_y) + min(all_y)) / 2
+            
+            half_range = max(x_range, y_range) / 2 + padding
+            ax3.set_xlim(x_center - half_range, x_center + half_range)
+            ax3.set_ylim(y_center - half_range, y_center + half_range)
+        else:
+            # If no trajectory data, use standard limits
+            ax3.set_xlim(-1.5, 1.5)
+            ax3.set_ylim(-1.5, 1.5)
         
-        # Set equal aspect ratio and limits (same as plot_center_out_layout)
-        ax3.set_xlim(-1.5, 1.5)
-        ax3.set_ylim(-1.5, 1.5)
+        # Set equal aspect ratio and other properties
         ax3.set_aspect('equal')
         ax3.grid(True, alpha=0.3)
         ax3.set_xlabel('X Position')
@@ -476,6 +478,13 @@ class BehavioralVisualizer:
         # Plot 4: Velocity Vector Field and Computed Trajectory
         ax4 = axes[1, 1]
         if 'velocity_x' in trial_data.columns and 'velocity_y' in trial_data.columns:
+            # Debug: Print velocity data info
+            print(f"Debug - Velocity data shape: {trial_data[['velocity_x', 'velocity_y']].shape}")
+            print(f"Debug - Velocity X range: {trial_data['velocity_x'].min():.6f} to {trial_data['velocity_x'].max():.6f}")
+            print(f"Debug - Velocity Y range: {trial_data['velocity_y'].min():.6f} to {trial_data['velocity_y'].max():.6f}")
+            print(f"Debug - Velocity X non-zero count: {(trial_data['velocity_x'] != 0).sum()}")
+            print(f"Debug - Velocity Y non-zero count: {(trial_data['velocity_y'] != 0).sum()}")
+            
             # Compute approximate trajectory by integrating velocity
             # Assuming constant time steps
             dt = 1.0  # Default time step
@@ -484,6 +493,7 @@ class BehavioralVisualizer:
                 time_diffs = np.diff(pd.to_datetime(trial_data['timestamp']).values)
                 if len(time_diffs) > 0:
                     dt = np.median(time_diffs) / np.timedelta64(1, 's')
+                    print(f"Debug - Computed dt: {dt:.6f} seconds")
             
             # Integrate velocity to get position (starting from origin)
             pos_x = np.cumsum(trial_data['velocity_x'] * dt)
@@ -493,13 +503,20 @@ class BehavioralVisualizer:
             pos_x = pos_x - pos_x.iloc[0]
             pos_y = pos_y - pos_y.iloc[0]
             
+            # Debug: Print trajectory info
+            print(f"Debug - Trajectory X range: {pos_x.min():.6f} to {pos_x.max():.6f}")
+            print(f"Debug - Trajectory Y range: {pos_y.min():.6f} to {pos_y.max():.6f}")
+            print(f"Debug - Trajectory length: {len(pos_x)} points")
+            print(f"Debug - Start point: ({pos_x.iloc[0]:.6f}, {pos_y.iloc[0]:.6f})")
+            print(f"Debug - End point: ({pos_x.iloc[-1]:.6f}, {pos_y.iloc[-1]:.6f})")
+            
             # Plot computed trajectory
-            ax4.plot(pos_x, pos_y, 'b-', linewidth=2, alpha=0.7, label='Computed Trajectory')
+            ax4.plot(pos_x, pos_y, 'b-', linewidth=3, alpha=0.9, label='Computed Trajectory')
             
             # Mark start and end points
             if len(pos_x) > 0:
-                ax4.plot(pos_x.iloc[0], pos_y.iloc[0], 'go', markersize=8, label='Start')
-                ax4.plot(pos_x.iloc[-1], pos_y.iloc[-1], 'ro', markersize=8, label='End')
+                ax4.plot(pos_x.iloc[0], pos_y.iloc[0], 'go', markersize=10, label='Start')
+                ax4.plot(pos_x.iloc[-1], pos_y.iloc[-1], 'ro', markersize=10, label='End')
             
             # Add target position if available
             if 'target_index' in trial_data.columns and len(trial_data) > 0:
@@ -518,27 +535,38 @@ class BehavioralVisualizer:
                         target_y = target_distance * np.sin(target_angle)
                         ax4.plot(target_x, target_y, 'rs', markersize=12, 
                                 label=f'Target {target_idx_int}')
+                        print(f"Debug - Target position: ({target_x:.6f}, {target_y:.6f})")
                 except (ValueError, TypeError):
                     pass
             
             # Add center point
-            ax4.plot(0, 0, 'ko', markersize=8, label='Center')
+            ax4.plot(0, 0, 'ko', markersize=10, label='Center')
             
-            # Add velocity vectors at key points
-            n_vectors = min(10, len(trial_data))  # Show up to 10 vectors
+            # Add velocity vectors at key points (make them more visible)
+            n_vectors = min(5, len(trial_data))  # Show fewer vectors for clarity
             if n_vectors > 1:
                 indices = np.linspace(0, len(trial_data)-1, n_vectors, dtype=int)
-                for i in indices[::2]:  # Every other vector to avoid clutter
-                    ax4.arrow(pos_x.iloc[i], pos_y.iloc[i], 
-                             trial_data['velocity_x'].iloc[i] * dt * 10,  # Scale for visibility
-                             trial_data['velocity_y'].iloc[i] * dt * 10,
-                             head_width=0.05, head_length=0.05, fc='red', ec='red', alpha=0.6)
+                for i in indices:
+                    # Scale velocity vectors for better visibility
+                    vel_scale = 100  # Larger scale factor
+                    vel_x = trial_data['velocity_x'].iloc[i] * dt * vel_scale
+                    vel_y = trial_data['velocity_y'].iloc[i] * dt * vel_scale
+                    
+                    if abs(vel_x) > 0.001 or abs(vel_y) > 0.001:  # Only draw if velocity is significant
+                        ax4.arrow(pos_x.iloc[i], pos_y.iloc[i], vel_x, vel_y,
+                                 head_width=0.01, head_length=0.01, fc='red', ec='red', alpha=0.8)
             
             ax4.set_xlabel('X Position (integrated)')
             ax4.set_ylabel('Y Position (integrated)')
             ax4.set_aspect('equal')
             ax4.grid(True, alpha=0.3)
             ax4.legend()
+            
+            # Add text annotation with trajectory stats
+            stats_text = f"Trajectory Range:\nX: {pos_x.min():.3f} to {pos_x.max():.3f}\nY: {pos_y.min():.3f} to {pos_y.max():.3f}"
+            ax4.text(0.02, 0.98, stats_text, transform=ax4.transAxes, fontsize=8,
+                    verticalalignment='top', bbox=dict(boxstyle="round,pad=0.3", 
+                    facecolor="lightblue", alpha=0.8))
         else:
             ax4.text(0.5, 0.5, 'Velocity data\nnot available', 
                     ha='center', va='center', transform=ax4.transAxes)
