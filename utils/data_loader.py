@@ -140,6 +140,20 @@ class DataLoader:
             print(f"Warning: Missing outcome columns for trial segmentation: {outcome_cols}")
             return data
         
+        # Convert boolean columns to proper boolean type (handle 1/0, 'True'/'False', etc.)
+        for col in ['trial_start', 'trial_win', 'trial_lose']:
+            if col in data.columns:
+                # Handle different boolean representations
+                if data[col].dtype in ['int64', 'float64', 'int32', 'float32']:
+                    # Numeric: 1 = True, 0 = False
+                    data[col] = data[col] > 0
+                elif data[col].dtype == 'bool':
+                    # Already boolean, keep as is
+                    pass
+                else:
+                    # String representations: convert various formats to boolean
+                    data[col] = data[col].astype(str).str.lower().str.strip().isin(['true', '1', '1.0', 'yes'])
+        
         # Find trial start and end points
         trial_starts = data.index[data['trial_start'] == True].tolist()
         
@@ -167,8 +181,8 @@ class DataLoader:
             trial_segment = data.iloc[start_idx:search_end]
             
             # Find trial outcome
-            win_indices = trial_segment.index[trial_segment.get('trial_win', False) == True]
-            lose_indices = trial_segment.index[trial_segment.get('trial_lose', False) == True]
+            win_indices = trial_segment.index[trial_segment.get('trial_win', pd.Series([False]*len(trial_segment))) == True]
+            lose_indices = trial_segment.index[trial_segment.get('trial_lose', pd.Series([False]*len(trial_segment))) == True]
             
             # Determine trial end and outcome
             if len(win_indices) > 0 and len(lose_indices) > 0:

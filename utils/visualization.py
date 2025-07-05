@@ -372,57 +372,106 @@ class BehavioralVisualizer:
         ax2.set_title(f'Speed Profile & Movement Onset - Trial {trial_num}')
         ax2.set_xlabel(time_label)
         
-        # Plot 3: Target Information
+        # Plot 3: Target Layout with Trajectory Overlay
         ax3 = axes[1, 0]
-        target_info_text = ""
         
-        # Check for target information
-        if 'target_index' in trial_data.columns:
-            target_index = trial_data['target_index'].iloc[0] if len(trial_data) > 0 else 'Unknown'
-            target_info_text += f"Target Index: {target_index}\n"
-            
-            # Show target index over time if it changes
-            if trial_data['target_index'].nunique() > 1:
-                ax3.plot(time_axis, trial_data['target_index'], 'o-', color='purple', linewidth=2)
-                ax3.set_ylabel('Target Index')
-                ax3.set_xlabel(time_label)
-                ax3.grid(True, alpha=0.3)
-            else:
-                # Static target display
-                ax3.text(0.5, 0.7, f"Target Index: {target_index}", 
-                        ha='center', va='center', transform=ax3.transAxes, fontsize=16)
-        else:
-            target_info_text += "Target Index: Not available\n"
+        # Use the same style as plot_center_out_layout
+        # Plot center
+        center = Circle((0, 0), 0.1, color='red', alpha=0.7, label='Center')
+        ax3.add_patch(center)
         
-        # Number of targets from data or default to 8
-        if 'num_targets' in trial_data.columns:
-            n_targets = trial_data['num_targets'].iloc[0] if len(trial_data) > 0 else 8
-        else:
-            n_targets = 8  # Default for Center Out
-        target_info_text += f"Number of Targets: {n_targets}\n"
-        
-        # Add target direction if we can calculate it
+        # Plot targets using the center_out_targets structure
+        current_target_idx = None
         if 'target_index' in trial_data.columns and len(trial_data) > 0:
-            target_idx = trial_data['target_index'].iloc[0]
-            try:
-                target_idx_int = int(target_idx)
-                if 0 <= target_idx_int < n_targets:
-                    target_angle = target_idx_int * (360 / n_targets)  # Evenly spaced around circle
-                    target_info_text += f"Target Direction: {target_angle}°\n"
-            except (ValueError, TypeError):
-                target_info_text += "Target Direction: Unknown\n"
+            current_target_idx = trial_data['target_index'].iloc[0]
         
-        # Add trial outcome if available
-        if 'trial_outcome' in trial_data.columns:
-            outcome = trial_data['trial_outcome'].iloc[0] if len(trial_data) > 0 else 'Unknown'
-            target_info_text += f"Trial Outcome: {outcome}\n"
+        for i, (target_name, target_info) in enumerate(self.center_out_targets.items()):
+            # Highlight current target
+            if current_target_idx is not None and i == current_target_idx:
+                target = Circle(
+                    (target_info['x'], target_info['y']), 
+                    0.12,  # Slightly larger for current target
+                    color='red', 
+                    alpha=0.8,
+                    linewidth=2,
+                    edgecolor='darkred'
+                )
+                ax3.add_patch(target)
+            else:
+                target = Circle(
+                    (target_info['x'], target_info['y']), 
+                    0.08, 
+                    color='blue', 
+                    alpha=0.7
+                )
+                ax3.add_patch(target)
+            
+            # Add target labels
+            ax3.text(
+                target_info['x'] * 1.2, 
+                target_info['y'] * 1.2, 
+                f'T{i}\n{target_info["direction"]}',
+                ha='center', 
+                va='center',
+                fontsize=9,
+                fontweight='bold' if current_target_idx is not None and i == current_target_idx else 'normal'
+            )
         
-        ax3.text(0.5, 0.3, target_info_text, ha='center', va='center', 
-                transform=ax3.transAxes, fontsize=12, bbox=dict(boxstyle="round,pad=0.3", 
-                facecolor="lightblue", alpha=0.7))
-        ax3.set_title(f'Target Information - Trial {trial_num}')
-        ax3.set_xticks([])
-        ax3.set_yticks([])
+        # Compute and overlay trajectory if velocity data available
+        if 'velocity_x' in trial_data.columns and 'velocity_y' in trial_data.columns and len(trial_data) > 1:
+            # Compute trajectory from velocity
+            dt = 1.0  # Default time step
+            if 'timestamp' in trial_data.columns and len(trial_data) > 1:
+                time_diffs = np.diff(pd.to_datetime(trial_data['timestamp']).values)
+                if len(time_diffs) > 0:
+                    dt = np.median(time_diffs) / np.timedelta64(1, 's')
+            
+            # Integrate velocity to get position (starting from center)
+            pos_x = np.cumsum(trial_data['velocity_x'] * dt)
+            pos_y = np.cumsum(trial_data['velocity_y'] * dt)
+            
+            # Center the trajectory (start at origin)
+            pos_x = pos_x - pos_x.iloc[0]
+            pos_y = pos_y - pos_y.iloc[0]
+            
+            # Scale trajectory to fit within the layout (targets are at radius 1.0)
+            max_pos = max(np.max(np.abs(pos_x)), np.max(np.abs(pos_y)))
+            if max_pos > 0:
+                scale_factor = 0.8 / max_pos  # Scale to fit within 80% of target radius
+                pos_x_scaled = pos_x * scale_factor
+                pos_y_scaled = pos_y * scale_factor
+            else:
+                pos_x_scaled = pos_x
+                pos_y_scaled = pos_y
+            
+            # Plot trajectory
+            ax3.plot(pos_x_scaled, pos_y_scaled, 'g-', linewidth=3, alpha=0.8, label='Trajectory')
+            
+            # Mark start and end points
+            ax3.plot(pos_x_scaled.iloc[0], pos_y_scaled.iloc[0], 'go', markersize=8, 
+                    label='Start', markeredgecolor='darkgreen', markeredgewidth=2)
+            ax3.plot(pos_x_scaled.iloc[-1], pos_y_scaled.iloc[-1], 'ro', markersize=8, 
+                    label='End', markeredgecolor='darkred', markeredgewidth=2)
+        
+        # Set equal aspect ratio and limits (same as plot_center_out_layout)
+        ax3.set_xlim(-1.5, 1.5)
+        ax3.set_ylim(-1.5, 1.5)
+        ax3.set_aspect('equal')
+        ax3.grid(True, alpha=0.3)
+        ax3.set_xlabel('X Position')
+        ax3.set_ylabel('Y Position')
+        ax3.legend(loc='upper right', fontsize=8)
+        
+        # Add trial info
+        if current_target_idx is not None:
+            outcome = trial_data['trial_outcome'].iloc[0] if 'trial_outcome' in trial_data.columns else 'Unknown'
+            target_direction = self.center_out_targets[f'target_{current_target_idx}']['direction']
+            info_text = f"Target {current_target_idx} ({target_direction})\nOutcome: {outcome}"
+            ax3.text(0.02, 0.98, info_text, transform=ax3.transAxes, fontsize=10,
+                    verticalalignment='top', bbox=dict(boxstyle="round,pad=0.3", 
+                    facecolor="lightyellow", alpha=0.8))
+        
+        ax3.set_title(f'Center Out Layout & Trajectory - Trial {trial_num}')
         
         # Plot 4: Velocity Vector Field and Computed Trajectory
         ax4 = axes[1, 1]
