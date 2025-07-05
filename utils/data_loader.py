@@ -254,9 +254,11 @@ class DataLoader:
         
         return data
     
-    def load_neural_data(self, file_path, force_reload=False):
+    def load_neural_data(self, file_path, force_reload=False, 
+                        max_channels=None, max_duration=None, 
+                        start_time=0, downsample_factor=1):
         """
-        Load neural data from .ns6 file using Neo.
+        Load neural data from .ns6 file using Neo with memory-efficient options.
         
         Parameters:
         -----------
@@ -264,6 +266,14 @@ class DataLoader:
             Path to the .ns6 file
         force_reload : bool, optional
             If True, reload even if same file is already loaded
+        max_channels : int, optional
+            Maximum number of channels to load (loads first N channels)
+        max_duration : float, optional
+            Maximum duration to load in seconds (loads from start_time)
+        start_time : float, optional
+            Start time in seconds (default: 0)
+        downsample_factor : int, optional
+            Downsample factor (1 = no downsampling, 2 = half sample rate, etc.)
             
         Returns:
         --------
@@ -286,28 +296,20 @@ class DataLoader:
         
         print(f"Loading neural data from: {file_path}")
         
+        # Print memory-efficient loading options
+        if max_channels is not None:
+            print(f"  - Loading only first {max_channels} channels")
+        if max_duration is not None:
+            print(f"  - Loading only {max_duration} seconds starting from {start_time}s")
+        if downsample_factor > 1:
+            print(f"  - Downsampling by factor of {downsample_factor}")
+        
         try:
             # Create Neo reader for Blackrock files
             reader = neo.BlackrockIO(filename=file_path)
             
-            # Read the data
-            block = reader.read_block()
-            
-            # Extract the first segment (assuming single segment recording)
-            segment = block.segments[0]
-            
-            # Get analog signals (raw neural data)
-            analog_signals = segment.analogsignals
-            
-            if len(analog_signals) > 0:
-                # Get the main analog signal
-                raw_signal = analog_signals[0]
-                
-                # Extract data and metadata
-                raw_data = raw_signal.magnitude  # Raw voltage data
-                times = raw_signal.times.magnitude  # Time stamps
-                sampling_rate = float(raw_signal.sampling_rate.magnitude)
-                
+            # First, get basic file info without loading data
+            try:
                 # Get Time Origin from the reader metadata
                 if hasattr(reader, 'datetime'):
                     self.time_origin = reader.datetime
@@ -330,38 +332,153 @@ class DataLoader:
                     self.time_origin = datetime(2025, 3, 25, 9, 22, 53, tzinfo=timezone.utc)
                 
                 print(f"Neural data Time Origin: {self.time_origin}")
-                print(f"Neural data shape: {raw_data.shape}")
-                print(f"Sampling rate: {sampling_rate} Hz")
-                print(f"Duration: {len(times)/sampling_rate:.2f} seconds")
-                print(f"Number of channels: {raw_data.shape[1] if len(raw_data.shape) > 1 else 1}")
                 
-                # Store metadata
-                self.neural_metadata = {
-                    'sampling_rate': sampling_rate,
-                    'n_channels': raw_data.shape[1] if len(raw_data.shape) > 1 else 1,
-                    'duration': len(times) / sampling_rate,
-                    'time_origin': self.time_origin,
-                    'file_path': file_path
-                }
+                # Get basic file info
+                header = reader.header
+                if 'signal_channels' in header:
+                    total_channels = len(header['signal_channels'])
+                    original_sampling_rate = float(header['signal_channels'][0][2])  # sampling rate
+                    
+                    print(f"File contains {total_channels} channels at {original_sampling_rate} Hz")
+                    
+                    # Estimate memory usage
+                    if max_duration is None:
+                        # Try to get duration from header
+                        if hasattr(reader, 'segment_duration'):
+                            total_duration = reader.segment_duration(0)
+                        else:
+                            total_duration = None
+                    else:
+                        total_duration = max_duration
+                    
+                    if total_duration is not None:
+                        channels_to_load = min(total_channels, max_channels or total_channels)
+                        effective_sampling_rate = original_sampling_rate / downsample_factor
+                        estimated_samples = int(total_duration * effective_sampling_rate)
+                        estimated_memory_gb = (estimated_samples * channels_to_load * 4) / (1024**3)  # 4 bytes per float32
+                        
+                        print(f"Estimated memory usage: {estimated_memory_gb:.2f} GB")
+                        
+                        if estimated_memory_gb > 4.0:
+                            print("WARNING: Estimated memory usage is high. Consider reducing:")
+                            print(f"  - max_channels (currently: {channels_to_load})")
+                            print(f"  - max_duration (currently: {total_duration})")
+                            print(f"  - downsample_factor (currently: {downsample_factor})")
                 
-                # Store data
-                self.neural_data = {
-                    'raw_data': raw_data,
-                    'times': times,
-                    'sampling_rate': sampling_rate,
-                    'time_origin': self.time_origin
-                }
+            except Exception as e:
+                print(f"Could not get file info: {e}")
+                print("Proceeding with data loading...")
+            
+            # Read the data with memory-efficient options
+            if max_duration is not None or max_channels is not None:
+                # Use lazy loading approach
+                block = reader.read_block(lazy=True)
+                segment = block.segments[0]
+                analog_signals = segment.analogsignals
                 
-                print("Neural data loaded successfully!")
-                return self.neural_data
-                
+                if len(analog_signals) > 0:
+                    raw_signal = analog_signals[0]
+                    
+                    # Calculate time indices
+                    sampling_rate = float(raw_signal.sampling_rate.magnitude)
+                    start_idx = int(start_time * sampling_rate)
+                    
+                    if max_duration is not None:
+                        end_idx = int((start_time + max_duration) * sampling_rate)
+                    else:
+                        end_idx = None
+                    
+                    # Load data with slicing
+                    if end_idx is not None:
+                        raw_data = raw_signal.magnitude[start_idx:end_idx]
+                        times = raw_signal.times.magnitude[start_idx:end_idx]
+                    else:
+                        raw_data = raw_signal.magnitude[start_idx:]
+                        times = raw_signal.times.magnitude[start_idx:]
+                    
+                    # Adjust times to start from 0
+                    times = times - times[0]
+                    
+                    # Channel selection
+                    if max_channels is not None and raw_data.shape[1] > max_channels:
+                        raw_data = raw_data[:, :max_channels]
+                        print(f"Selected first {max_channels} channels out of {raw_signal.shape[1]} available")
+                    
+                    # Downsampling
+                    if downsample_factor > 1:
+                        raw_data = raw_data[::downsample_factor]
+                        times = times[::downsample_factor]
+                        sampling_rate = sampling_rate / downsample_factor
+                        print(f"Downsampled by factor of {downsample_factor}, new sampling rate: {sampling_rate} Hz")
+                    
+                else:
+                    print("No analog signals found in the neural data file.")
+                    return None
+                    
             else:
-                print("No analog signals found in the neural data file.")
-                return None
+                # Standard loading (for small files)
+                block = reader.read_block()
+                segment = block.segments[0]
+                analog_signals = segment.analogsignals
                 
+                if len(analog_signals) > 0:
+                    raw_signal = analog_signals[0]
+                    raw_data = raw_signal.magnitude
+                    times = raw_signal.times.magnitude
+                    sampling_rate = float(raw_signal.sampling_rate.magnitude)
+                    
+                    # Downsampling if requested
+                    if downsample_factor > 1:
+                        raw_data = raw_data[::downsample_factor]
+                        times = times[::downsample_factor]
+                        sampling_rate = sampling_rate / downsample_factor
+                        print(f"Downsampled by factor of {downsample_factor}, new sampling rate: {sampling_rate} Hz")
+                        
+                else:
+                    print("No analog signals found in the neural data file.")
+                    return None
+            
+            print(f"Loaded neural data shape: {raw_data.shape}")
+            print(f"Effective sampling rate: {sampling_rate} Hz")
+            print(f"Loaded duration: {len(times)/sampling_rate:.2f} seconds")
+            print(f"Number of channels: {raw_data.shape[1] if len(raw_data.shape) > 1 else 1}")
+            
+            # Store metadata
+            self.neural_metadata = {
+                'sampling_rate': sampling_rate,
+                'n_channels': raw_data.shape[1] if len(raw_data.shape) > 1 else 1,
+                'duration': len(times) / sampling_rate,
+                'time_origin': self.time_origin,
+                'file_path': file_path,
+                'max_channels': max_channels,
+                'max_duration': max_duration,
+                'start_time': start_time,
+                'downsample_factor': downsample_factor
+            }
+            
+            # Store data
+            self.neural_data = {
+                'raw_data': raw_data,
+                'times': times,
+                'sampling_rate': sampling_rate,
+                'time_origin': self.time_origin
+            }
+            
+            print("Neural data loaded successfully!")
+            return self.neural_data
+            
         except Exception as e:
             print(f"Error loading neural data: {e}")
             print("Make sure the Neo library is installed and the file format is supported.")
+            
+            # Suggest memory-efficient options
+            if "unable to allocate" in str(e).lower() or "memory" in str(e).lower():
+                print("\nMemory Error Solutions:")
+                print("1. Load fewer channels: loader.load_neural_data(file_path, max_channels=32)")
+                print("2. Load shorter duration: loader.load_neural_data(file_path, max_duration=60)")
+                print("3. Downsample the data: loader.load_neural_data(file_path, downsample_factor=10)")
+                print("4. Combine options: loader.load_neural_data(file_path, max_channels=16, max_duration=30, downsample_factor=5)")
+            
             return None
     
     def get_data_info(self):

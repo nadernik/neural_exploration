@@ -311,11 +311,42 @@ class BehavioralVisualizer:
         # Create figure with subplots
         fig, axes = plt.subplots(2, 2, figsize=figsize)
         
-        # Get time axis
-        if 'timestamp' in trial_data.columns:
+        # Get time axis - prioritize aligned timestamps, then regular timestamps, then sample indices
+        time_relative_to_trial = False
+        
+        if 'timestamp_aligned' in trial_data.columns:
+            # Use aligned timestamps (seconds since neural Time Origin)
+            time_axis = trial_data['timestamp_aligned']
+            time_label = 'Time (seconds since neural start)'
+            
+            # Option to show time relative to trial start
+            if len(trial_data) > 0:
+                trial_start_time = trial_data['timestamp_aligned'].iloc[0]
+                time_axis_relative = trial_data['timestamp_aligned'] - trial_start_time
+                
+                # Use relative time if trial is short (< 60 seconds), absolute time otherwise
+                if (trial_data['timestamp_aligned'].iloc[-1] - trial_start_time) < 60:
+                    time_axis = time_axis_relative
+                    time_label = 'Time (seconds from trial start)'
+                    time_relative_to_trial = True
+                    
+        elif 'timestamp' in trial_data.columns:
+            # Use regular timestamps
             time_axis = trial_data['timestamp']
             time_label = 'Time (timestamp)'
+            
+            # Convert to relative time if available
+            if len(trial_data) > 0:
+                try:
+                    # Convert to seconds from trial start for better readability
+                    trial_start = trial_data['timestamp'].iloc[0]
+                    time_axis = [(t - trial_start).total_seconds() for t in trial_data['timestamp']]
+                    time_label = 'Time (seconds from trial start)'
+                    time_relative_to_trial = True
+                except:
+                    pass
         else:
+            # Fallback to sample indices
             time_axis = np.arange(len(trial_data))
             time_label = 'Time (samples)'
         
@@ -354,15 +385,15 @@ class BehavioralVisualizer:
                 movement_onset = np.where(vel_mag > movement_threshold)[0]
                 if len(movement_onset) > 0:
                     onset_idx = movement_onset[0]
-                    ax2.axvline(time_axis.iloc[onset_idx] if hasattr(time_axis, 'iloc') else time_axis[onset_idx], 
+                    ax2.axvline(time_axis[onset_idx] if time_relative_to_trial else time_axis[onset_idx], 
                                color='red', linestyle='--', alpha=0.7, label='Movement Onset')
                     ax2.axhline(movement_threshold, color='red', linestyle=':', alpha=0.5, label='Threshold')
                     ax2.legend()
                     
                     # Add annotation
                     ax2.annotate(f'Onset: {onset_idx/len(trial_data)*100:.1f}% into trial', 
-                                xy=(time_axis.iloc[onset_idx] if hasattr(time_axis, 'iloc') else time_axis[onset_idx], 
-                                    vel_mag.iloc[onset_idx]), 
+                                xy=(time_axis[onset_idx] if time_relative_to_trial else time_axis[onset_idx], 
+                                    vel_mag[onset_idx]), 
                                 xytext=(10, 10), textcoords='offset points',
                                 bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7),
                                 arrowprops=dict(arrowstyle='->', color='red'))
@@ -419,22 +450,30 @@ class BehavioralVisualizer:
         
         # Compute and overlay trajectory if velocity data available
         if 'velocity_x' in trial_data.columns and 'velocity_y' in trial_data.columns and len(trial_data) > 1:
-            # Compute trajectory from velocity (using the same simple method as multi-trial summary)
-            dt = 1.0  # Default time step
-            pos_x = np.cumsum(trial_data['velocity_x'] * dt)
-            pos_y = np.cumsum(trial_data['velocity_y'] * dt)
+            # Compute trajectory from velocity with proper time steps
+            if 'timestamp_aligned' in trial_data.columns:
+                # Use real time differences from aligned timestamps
+                time_diffs = np.diff(trial_data['timestamp_aligned'].values)
+                dt_array = np.concatenate([[time_diffs[0]], time_diffs])  # Add first element
+            else:
+                # Use default constant time step
+                dt_array = np.ones(len(trial_data)) * 1.0
+            
+            # Integrate velocity to get position (starting from center)
+            pos_x = np.cumsum(trial_data['velocity_x'].values * dt_array)
+            pos_y = np.cumsum(trial_data['velocity_y'].values * dt_array)
             
             # Center the trajectory (start at origin)
-            pos_x = pos_x - pos_x.iloc[0]
-            pos_y = pos_y - pos_y.iloc[0]
+            pos_x = pos_x - pos_x[0]
+            pos_y = pos_y - pos_y[0]
             
             # Plot trajectory (no scaling - let it show at natural size)
             ax3.plot(pos_x, pos_y, 'g-', linewidth=3, alpha=0.8, label='Trajectory')
             
             # Mark start and end points
-            ax3.plot(pos_x.iloc[0], pos_y.iloc[0], 'go', markersize=8, 
+            ax3.plot(pos_x[0], pos_y[0], 'go', markersize=8, 
                     label='Start', markeredgecolor='darkgreen', markeredgewidth=2)
-            ax3.plot(pos_x.iloc[-1], pos_y.iloc[-1], 'ro', markersize=8, 
+            ax3.plot(pos_x[-1], pos_y[-1], 'ro', markersize=8, 
                     label='End', markeredgecolor='darkred', markeredgewidth=2)
             
             # Adjust axis limits dynamically to show both targets and trajectory
@@ -464,11 +503,23 @@ class BehavioralVisualizer:
         ax3.set_ylabel('Y Position')
         ax3.legend(loc='upper right', fontsize=8)
         
-        # Add trial info
+        # Add trial info with timing
         if current_target_idx is not None:
             outcome = trial_data['trial_outcome'].iloc[0] if 'trial_outcome' in trial_data.columns else 'Unknown'
             target_direction = self.center_out_targets[f'target_{current_target_idx}']['direction']
-            info_text = f"Target {current_target_idx} ({target_direction})\nOutcome: {outcome}"
+            
+            # Add timing information
+            timing_info = ""
+            if 'timestamp_aligned' in trial_data.columns:
+                trial_start = trial_data['timestamp_aligned'].iloc[0]
+                trial_end = trial_data['timestamp_aligned'].iloc[-1]
+                trial_duration = trial_end - trial_start
+                timing_info = f"\nStart: {trial_start:.3f}s\nDuration: {trial_duration:.3f}s"
+            elif time_relative_to_trial:
+                trial_duration = time_axis[-1] if hasattr(time_axis, '__len__') else 0
+                timing_info = f"\nDuration: {trial_duration:.3f}s"
+            
+            info_text = f"Target {current_target_idx} ({target_direction})\nOutcome: {outcome}{timing_info}"
             ax3.text(0.02, 0.98, info_text, transform=ax3.transAxes, fontsize=10,
                     verticalalignment='top', bbox=dict(boxstyle="round,pad=0.3", 
                     facecolor="lightyellow", alpha=0.8))
@@ -478,45 +529,30 @@ class BehavioralVisualizer:
         # Plot 4: Velocity Vector Field and Computed Trajectory
         ax4 = axes[1, 1]
         if 'velocity_x' in trial_data.columns and 'velocity_y' in trial_data.columns:
-            # Debug: Print velocity data info
-            print(f"Debug - Velocity data shape: {trial_data[['velocity_x', 'velocity_y']].shape}")
-            print(f"Debug - Velocity X range: {trial_data['velocity_x'].min():.6f} to {trial_data['velocity_x'].max():.6f}")
-            print(f"Debug - Velocity Y range: {trial_data['velocity_y'].min():.6f} to {trial_data['velocity_y'].max():.6f}")
-            print(f"Debug - Velocity X non-zero count: {(trial_data['velocity_x'] != 0).sum()}")
-            print(f"Debug - Velocity Y non-zero count: {(trial_data['velocity_y'] != 0).sum()}")
-            
-            # Compute approximate trajectory by integrating velocity
-            # Assuming constant time steps
-            dt = 1.0  # Default time step
-            if 'timestamp' in trial_data.columns and len(trial_data) > 1:
-                # Try to calculate actual time differences
-                time_diffs = np.diff(pd.to_datetime(trial_data['timestamp']).values)
-                if len(time_diffs) > 0:
-                    dt = np.median(time_diffs) / np.timedelta64(1, 's')
-                    print(f"Debug - Computed dt: {dt:.6f} seconds")
-            
-            # Integrate velocity to get position (starting from origin)
-            pos_x = np.cumsum(trial_data['velocity_x'] * dt)
-            pos_y = np.cumsum(trial_data['velocity_y'] * dt)
+            # Compute trajectory from velocity with proper time steps
+            if 'timestamp_aligned' in trial_data.columns:
+                # Use real time differences from aligned timestamps
+                time_diffs = np.diff(trial_data['timestamp_aligned'].values)
+                dt_array = np.concatenate([[time_diffs[0]], time_diffs])  # Add first element
+                pos_x = np.cumsum(trial_data['velocity_x'].values * dt_array)
+                pos_y = np.cumsum(trial_data['velocity_y'].values * dt_array)
+            else:
+                # Use default constant time step
+                dt = 1.0
+                pos_x = np.cumsum(trial_data['velocity_x'] * dt)
+                pos_y = np.cumsum(trial_data['velocity_y'] * dt)
             
             # Center the trajectory (start at origin)
-            pos_x = pos_x - pos_x.iloc[0]
-            pos_y = pos_y - pos_y.iloc[0]
-            
-            # Debug: Print trajectory info
-            print(f"Debug - Trajectory X range: {pos_x.min():.6f} to {pos_x.max():.6f}")
-            print(f"Debug - Trajectory Y range: {pos_y.min():.6f} to {pos_y.max():.6f}")
-            print(f"Debug - Trajectory length: {len(pos_x)} points")
-            print(f"Debug - Start point: ({pos_x.iloc[0]:.6f}, {pos_y.iloc[0]:.6f})")
-            print(f"Debug - End point: ({pos_x.iloc[-1]:.6f}, {pos_y.iloc[-1]:.6f})")
+            pos_x = pos_x - pos_x[0]
+            pos_y = pos_y - pos_y[0]
             
             # Plot computed trajectory
             ax4.plot(pos_x, pos_y, 'b-', linewidth=3, alpha=0.9, label='Computed Trajectory')
             
             # Mark start and end points
             if len(pos_x) > 0:
-                ax4.plot(pos_x.iloc[0], pos_y.iloc[0], 'go', markersize=10, label='Start')
-                ax4.plot(pos_x.iloc[-1], pos_y.iloc[-1], 'ro', markersize=10, label='End')
+                ax4.plot(pos_x[0], pos_y[0], 'go', markersize=10, label='Start')
+                ax4.plot(pos_x[-1], pos_y[-1], 'ro', markersize=10, label='End')
             
             # Add target position if available
             if 'target_index' in trial_data.columns and len(trial_data) > 0:
@@ -528,33 +564,18 @@ class BehavioralVisualizer:
                     if 0 <= target_idx_int < n_targets:
                         target_angle = target_idx_int * (2 * np.pi / n_targets)  # Convert to radians
                         # Estimate target distance from trajectory end point
-                        trajectory_distance = np.sqrt(pos_x.iloc[-1]**2 + pos_y.iloc[-1]**2)
+                        trajectory_distance = np.sqrt(pos_x[-1]**2 + pos_y[-1]**2)
                         target_distance = max(1.0, trajectory_distance * 1.2)  # A bit beyond trajectory end
                         
                         target_x = target_distance * np.cos(target_angle)
                         target_y = target_distance * np.sin(target_angle)
                         ax4.plot(target_x, target_y, 'rs', markersize=12, 
                                 label=f'Target {target_idx_int}')
-                        print(f"Debug - Target position: ({target_x:.6f}, {target_y:.6f})")
                 except (ValueError, TypeError):
                     pass
             
             # Add center point
             ax4.plot(0, 0, 'ko', markersize=10, label='Center')
-            
-            # Add velocity vectors at key points (make them more visible)
-            n_vectors = min(5, len(trial_data))  # Show fewer vectors for clarity
-            if n_vectors > 1:
-                indices = np.linspace(0, len(trial_data)-1, n_vectors, dtype=int)
-                for i in indices:
-                    # Scale velocity vectors for better visibility
-                    vel_scale = 100  # Larger scale factor
-                    vel_x = trial_data['velocity_x'].iloc[i] * dt * vel_scale
-                    vel_y = trial_data['velocity_y'].iloc[i] * dt * vel_scale
-                    
-                    if abs(vel_x) > 0.001 or abs(vel_y) > 0.001:  # Only draw if velocity is significant
-                        ax4.arrow(pos_x.iloc[i], pos_y.iloc[i], vel_x, vel_y,
-                                 head_width=0.01, head_length=0.01, fc='red', ec='red', alpha=0.8)
             
             ax4.set_xlabel('X Position (integrated)')
             ax4.set_ylabel('Y Position (integrated)')
@@ -606,17 +627,48 @@ class BehavioralVisualizer:
         # Plot 1: Trial durations
         ax1 = axes[0, 0]
         trial_durations = []
+        duration_unit = 'samples'
+        
         for trial in trials_to_plot:
             trial_data = self.behavioral_data[self.behavioral_data['trial'] == trial]
-            trial_durations.append(len(trial_data))
+            
+            # Calculate actual duration if aligned timestamps available
+            if 'timestamp_aligned' in trial_data.columns and len(trial_data) > 1:
+                duration = trial_data['timestamp_aligned'].iloc[-1] - trial_data['timestamp_aligned'].iloc[0]
+                trial_durations.append(duration)
+                duration_unit = 'seconds'
+            elif 'timestamp' in trial_data.columns and len(trial_data) > 1:
+                # Try to compute duration from timestamps
+                try:
+                    start_time = trial_data['timestamp'].iloc[0]
+                    end_time = trial_data['timestamp'].iloc[-1]
+                    if hasattr(start_time, 'total_seconds'):
+                        duration = (end_time - start_time).total_seconds()
+                    else:
+                        duration = len(trial_data)
+                    trial_durations.append(duration)
+                    duration_unit = 'seconds' if hasattr(start_time, 'total_seconds') else 'samples'
+                except:
+                    trial_durations.append(len(trial_data))
+                    duration_unit = 'samples'
+            else:
+                trial_durations.append(len(trial_data))
+                duration_unit = 'samples'
         
         ax1.bar(range(len(trials_to_plot)), trial_durations, alpha=0.7)
         ax1.set_xlabel('Trial Index')
-        ax1.set_ylabel('Trial Duration (samples)')
+        ax1.set_ylabel(f'Trial Duration ({duration_unit})')
         ax1.set_title('Trial Durations')
         ax1.set_xticks(range(len(trials_to_plot)))
         ax1.set_xticklabels([f'T{t}' for t in trials_to_plot])
         ax1.grid(True, alpha=0.3)
+        
+        # Add duration statistics
+        if trial_durations:
+            mean_duration = np.mean(trial_durations)
+            std_duration = np.std(trial_durations)
+            ax1.axhline(mean_duration, color='red', linestyle='--', alpha=0.7, label=f'Mean: {mean_duration:.2f}')
+            ax1.legend()
         
         # Plot 2: Target distribution
         ax2 = axes[0, 1]
@@ -639,13 +691,22 @@ class BehavioralVisualizer:
                 
                 # Compute trajectory from velocity
                 if len(trial_data) > 1:
-                    dt = 1.0  # Default time step
-                    pos_x = np.cumsum(trial_data['velocity_x'] * dt)
-                    pos_y = np.cumsum(trial_data['velocity_y'] * dt)
+                    # Use proper time steps if aligned timestamps available
+                    if 'timestamp_aligned' in trial_data.columns:
+                        # Use real time differences from aligned timestamps
+                        time_diffs = np.diff(trial_data['timestamp_aligned'].values)
+                        dt_array = np.concatenate([[time_diffs[0]], time_diffs])  # Add first element
+                        pos_x = np.cumsum(trial_data['velocity_x'].values * dt_array)
+                        pos_y = np.cumsum(trial_data['velocity_y'].values * dt_array)
+                    else:
+                        # Use default constant time step
+                        dt = 1.0
+                        pos_x = np.cumsum(trial_data['velocity_x'] * dt)
+                        pos_y = np.cumsum(trial_data['velocity_y'] * dt)
                     
                     # Center trajectory at origin
-                    pos_x = pos_x - pos_x.iloc[0]
-                    pos_y = pos_y - pos_y.iloc[0]
+                    pos_x = pos_x - pos_x[0]
+                    pos_y = pos_y - pos_y[0]
                     
                     ax3.plot(pos_x, pos_y, alpha=0.6, linewidth=1, label=f'Trial {trial}')
             
