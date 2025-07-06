@@ -571,7 +571,7 @@ def main():
     
     # Run the alignment process
     try:
-        aligner.process_all(downsample=True)
+        aligner.process_all(downsample=False)
         
         logger.info("="*50)
         logger.info("TIME ALIGNMENT COMPLETE")
