@@ -373,7 +373,7 @@ class PreciseTimeAligner:
     
     def extract_neural_data(self, trial: Dict) -> Optional[np.ndarray]:
         """
-        Extract neural data for a specific trial using time_slice.
+        Extract neural data for a specific trial using analogsignal_chunk method.
         
         Args:
             trial: Trial dictionary with timing information
@@ -393,46 +393,27 @@ class PreciseTimeAligner:
             logger.info(f"Extracting neural data for trial {trial['trial_number']}: "
                        f"{start_seconds:.3f}s to {end_seconds:.3f}s")
             
-            # Try to use time_slice (this may fail in older neo versions)
-            try:
-                block = self.neural_io.read_block(time_slice=(start_seconds, end_seconds))
+            # Use get_analogsignal_chunk method
+            if hasattr(self.neural_io, 'get_analogsignal_chunk'):
+                start_sample = int(start_seconds * self.original_fs)
+                end_sample = int(end_seconds * self.original_fs)
                 
-                if block.segments and block.segments[0].analogsignals:
-                    # Get all analog signals
-                    neural_data = []
-                    for signal in block.segments[0].analogsignals:
-                        data = signal.magnitude
-                        if data.ndim == 1:
-                            neural_data.append(data.reshape(1, -1))
-                        else:
-                            neural_data.append(data.T)
+                try:
+                    chunk = self.neural_io.get_analogsignal_chunk(
+                        block_index=0,
+                        seg_index=0,
+                        i_start=start_sample,
+                        i_stop=end_sample
+                    )
                     
-                    neural_array = np.vstack(neural_data)
+                    neural_array = chunk.T  # Transpose to (channels, time)
                     logger.info(f"Extracted neural data shape: {neural_array.shape}")
                     return neural_array
                     
-            except Exception as e:
-                logger.warning(f"time_slice method failed: {e}")
-                
-                # Fallback: use get_analogsignal_chunk if available
-                if hasattr(self.neural_io, 'get_analogsignal_chunk'):
-                    start_sample = int(start_seconds * self.original_fs)
-                    end_sample = int(end_seconds * self.original_fs)
-                    
-                    try:
-                        chunk = self.neural_io.get_analogsignal_chunk(
-                            block_index=0,
-                            seg_index=0,
-                            i_start=start_sample,
-                            i_stop=end_sample
-                        )
-                        
-                        neural_array = chunk.T  # Transpose to (channels, time)
-                        logger.info(f"Extracted neural data using chunk method: {neural_array.shape}")
-                        return neural_array
-                        
-                    except Exception as e2:
-                        logger.error(f"chunk method also failed: {e2}")
+                except Exception as e:
+                    logger.error(f"Chunk method failed: {e}")
+            else:
+                logger.error("get_analogsignal_chunk method not available")
             
             return None
             
