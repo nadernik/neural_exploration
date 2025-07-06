@@ -101,19 +101,27 @@ class NeuralFeatureExtractor:
             for key in trial_group.attrs.keys():
                 metadata[key] = trial_group.attrs[key]
             
-            # Load behavioral data if available
-            behavioral_data = {}
-            if 'velocity_x' in trial_group and trial_group['velocity_x'] is not None:
-                behavioral_data['velocity_x'] = trial_group['velocity_x'][:]
-                behavioral_data['velocity_y'] = trial_group['velocity_y'][:]
-                behavioral_data['behavioral_timestamps'] = trial_group['behavioral_timestamps'][:]
-            
-            return {
+            # Load behavioral data if available (return at top level for compatibility)
+            result = {
                 'neural_data': neural_data,
-                'metadata': metadata,
-                'behavioral_data': behavioral_data,
-                'trial_number': trial_number
+                'trial_number': trial_number,
+                'velocity_x': None,
+                'velocity_y': None,
+                'behavioral_timestamps': None
             }
+            
+            # Add metadata to top level
+            result.update(metadata)
+            
+            # Load behavioral data to top level
+            if 'velocity_x' in trial_group:
+                result['velocity_x'] = trial_group['velocity_x'][:]
+            if 'velocity_y' in trial_group:
+                result['velocity_y'] = trial_group['velocity_y'][:]
+            if 'behavioral_timestamps' in trial_group:
+                result['behavioral_timestamps'] = trial_group['behavioral_timestamps'][:]
+            
+            return result
     
     def create_time_bins(self, n_samples: int, bin_size: float) -> np.ndarray:
         """Create time bins for feature extraction."""
