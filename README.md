@@ -17,10 +17,13 @@ This project provides tools to:
 ```
 neural_exploration/
 ├── precise_time_alignment.py          # Main integration script (RECOMMENDED)
+├── neural_feature_extraction.py       # Advanced neural feature extraction
 ├── data_quality_verification.ipynb    # Data verification and visualization
+├── neural_feature_exploration.ipynb   # Interactive feature exploration
 ├── requirements.txt                   # Python dependencies
 ├── README.md                          # This file
 ├── ALIGNMENT_GUIDE.md                 # Detailed alignment methodology
+├── NEURAL_FEATURE_EXTRACTION_GUIDE.md # Feature extraction guide
 ├── utils/                             # Utility modules
 │   ├── __init__.py
 │   ├── data_loader.py                 # Data loading utilities
@@ -47,6 +50,20 @@ neural_exploration/
    - Visualizes neural-behavioral correlations
    - Shows synchronized neural recordings with behavioral velocity
    - Provides quality metrics and troubleshooting guidance
+
+3. **`neural_feature_extraction.py`** - **ADVANCED FEATURE EXTRACTION**
+   - Extracts 4 types of neural features from spike channels
+   - Signal features (spike band power 400-6000 Hz)
+   - Local field potential (LFP) analysis with gamma bands
+   - Voltage features (moving average, variance)
+   - Thresholded spike counts (semi-spike detection)
+
+4. **`neural_feature_exploration.ipynb`** - **INTERACTIVE FEATURE EXPLORATION**
+   - Minimal interface for exploring extracted neural features
+   - Visualization of all feature types across channels
+   - Single-channel detailed analysis
+   - Channel comparison and ranking tools
+   - Save/load functionality for extracted features
 
 ## 🚀 Quick Start
 
