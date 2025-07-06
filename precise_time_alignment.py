@@ -440,6 +440,38 @@ class PreciseTimeAligner:
             logger.error(f"Failed to extract neural data for trial {trial['trial_number']}: {e}")
             return None
     
+    def extract_behavioral_data(self, trial: Dict) -> Dict:
+        """
+        Extract behavioral data for a specific trial from the behavioral DataFrame.
+        
+        Args:
+            trial: Trial dictionary with timing information
+            
+        Returns:
+            Dictionary containing behavioral data arrays
+        """
+        try:
+            start_idx = trial['start_idx']
+            end_idx = trial['end_idx']
+            
+            # Extract behavioral data for this trial
+            trial_behavioral_data = self.behavioral_data.iloc[start_idx:end_idx+1]
+            
+            behavioral_dict = {
+                'velocity_x': trial_behavioral_data['velocity_x'].values,
+                'velocity_y': trial_behavioral_data['velocity_y'].values,
+                'behavioral_timestamps': trial_behavioral_data['timestamp'].values.astype('datetime64[ns]').astype(np.float64) / 1e9  # Convert pd.Timestamp to UNIX seconds
+            }
+            
+            logger.info(f"Extracted behavioral data for trial {trial['trial_number']}: "
+                       f"{len(behavioral_dict['velocity_x'])} samples")
+            
+            return behavioral_dict
+            
+        except Exception as e:
+            logger.error(f"Failed to extract behavioral data for trial {trial['trial_number']}: {e}")
+            return {}
+
     def process_all(self, downsample: bool = True):
         """
         Run the complete precise time alignment pipeline.
@@ -491,6 +523,9 @@ class PreciseTimeAligner:
                 # Extract neural data
                 neural_data = self.extract_neural_data(trial)
                 
+                # Extract behavioral data
+                behavioral_data = self.extract_behavioral_data(trial)
+                
                 if neural_data is not None:
                     # Downsample if requested
                     if downsample and neural_data.shape[1] > 60:  # Only if enough samples
@@ -504,6 +539,14 @@ class PreciseTimeAligner:
                     
                     # Save neural data
                     trial_group.create_dataset('neural', data=neural_data, compression='gzip')
+                    
+                    # Save behavioral data if available
+                    if behavioral_data:
+                        for key, data in behavioral_data.items():
+                            if len(data) > 0:
+                                trial_group.create_dataset(key, data=data, compression='gzip')
+                                logger.info(f"Saved {key} with shape {data.shape}")
+                    
                     successful_trials += 1
                     
                     # Save metadata
@@ -518,7 +561,8 @@ class PreciseTimeAligner:
                     if trial['target_index'] is not None:
                         trial_group.attrs['target_index'] = trial['target_index']
                     
-                    logger.info(f"✅ Saved trial {trial['trial_number']}: {neural_data.shape}")
+                    logger.info(f"✅ Saved trial {trial['trial_number']}: neural {neural_data.shape}, "
+                               f"behavioral {len(behavioral_data)} datasets")
                 else:
                     logger.warning(f"❌ Failed to extract neural data for trial {trial['trial_number']}")
             
