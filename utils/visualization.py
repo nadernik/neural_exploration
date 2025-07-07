@@ -2160,3 +2160,254 @@ def _plot_spiketime_scatter(spike_times, rel_start_time, vert_spike_position):
             y_points.extend([trial + 1 + vert_spike_position] * len(times))
     
     return np.array(x_points), np.array(y_points)
+
+
+def plot_spike_detection_reliability(trial_data: dict, channel_idx: int, trial_number: int = None,
+                                   time_window: tuple = None, sampling_rate: int = 30000,
+                                   figsize: tuple = (15, 10)) -> None:
+    """
+    Plot raw neural data, filtered data, and detected spikes for reliability assessment.
+    
+    This function creates a comprehensive visualization showing:
+    1. Raw neural signal with detected spike locations
+    2. PyWaveClus filtered signal with detection threshold
+    3. Traditional threshold filtered signal (for comparison)
+    4. Spike detection comparison raster plot
+    
+    Args:
+        trial_data: Trial data dictionary containing neural data
+        channel_idx: Channel index to analyze
+        trial_number: Trial number for display purposes
+        time_window: Optional (start_time, end_time) in seconds for zoomed view
+        sampling_rate: Sampling rate in Hz
+        figsize: Figure size tuple
+    """
+    
+    # Import PyWaveClus detector
+    from utils.spike_detection import SpikeDetector
+    
+    # Validate input
+    if trial_data is None or 'neural_data' not in trial_data:
+        print("❌ No neural data found in trial_data")
+        return
+    
+    neural_data = trial_data['neural_data']
+    
+    if channel_idx >= neural_data.shape[0]:
+        print(f"❌ Channel {channel_idx} exceeds available channels ({neural_data.shape[0]})")
+        return
+    
+    # Get signal for the selected channel
+    signal_data = neural_data[channel_idx, :]
+    duration = trial_data.get('duration', neural_data.shape[1] / sampling_rate)
+    
+    print(f"🔍 Analyzing spike detection reliability for Channel {channel_idx}")
+    print(f"   Signal length: {len(signal_data)/sampling_rate:.2f}s")
+    print(f"   Signal RMS: {np.sqrt(np.mean(signal_data**2)):.1f}μV")
+    
+    # Initialize PyWaveClus detector
+    spike_detector = SpikeDetector(sampling_rate=sampling_rate)
+    
+    # Run PyWaveClus detection
+    waveclus_result = spike_detector.detect_spikes_waveclus(signal_data)
+    
+    # Also run traditional threshold detection for comparison
+    threshold_result = spike_detector.detect_spikes_threshold(signal_data)
+    
+    # Create time axis
+    time_axis = np.arange(len(signal_data)) / sampling_rate
+    
+    # Apply time window if specified
+    if time_window is not None:
+        start_idx = int(time_window[0] * sampling_rate)
+        end_idx = int(time_window[1] * sampling_rate)
+        time_axis = time_axis[start_idx:end_idx]
+        signal_subset = signal_data[start_idx:end_idx]
+        filtered_subset = waveclus_result['filtered_signal'][start_idx:end_idx]
+        threshold_filtered = threshold_result['filtered_signal'][start_idx:end_idx]
+        
+        # Filter spikes within time window
+        waveclus_spikes = waveclus_result['spike_times']
+        threshold_spikes = threshold_result['spike_times']
+        
+        waveclus_mask = (waveclus_spikes >= time_window[0]) & (waveclus_spikes <= time_window[1])
+        threshold_mask = (threshold_spikes >= time_window[0]) & (threshold_spikes <= time_window[1])
+        
+        waveclus_spikes = waveclus_spikes[waveclus_mask]
+        threshold_spikes = threshold_spikes[threshold_mask]
+        
+        window_title = f" ({time_window[0]:.1f}-{time_window[1]:.1f}s)"
+    else:
+        signal_subset = signal_data
+        filtered_subset = waveclus_result['filtered_signal']
+        threshold_filtered = threshold_result['filtered_signal']
+        waveclus_spikes = waveclus_result['spike_times']
+        threshold_spikes = threshold_result['spike_times']
+        window_title = ""
+    
+    # Create figure with subplots
+    fig, axes = plt.subplots(4, 1, figsize=figsize, sharex=True)
+    
+    # Plot 1: Raw neural signal
+    ax1 = axes[0]
+    ax1.plot(time_axis, signal_subset, 'k-', linewidth=0.8, alpha=0.8, label='Raw signal')
+    
+    # Mark PyWaveClus spikes on raw signal
+    if len(waveclus_spikes) > 0:
+        spike_indices = (waveclus_spikes * sampling_rate).astype(int)
+        if time_window is not None:
+            spike_indices = spike_indices - start_idx
+        
+        valid_indices = (spike_indices >= 0) & (spike_indices < len(signal_subset))
+        if np.any(valid_indices):
+            spike_values = signal_subset[spike_indices[valid_indices]]
+            ax1.scatter(waveclus_spikes[valid_indices], spike_values, 
+                       color='red', s=40, zorder=5, alpha=0.8, 
+                       label=f'PyWaveClus spikes ({len(waveclus_spikes)})')
+    
+    ax1.set_title(f'Raw Neural Signal - Channel {channel_idx}{window_title}', fontweight='bold')
+    ax1.set_ylabel('Amplitude (μV)')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: PyWaveClus filtered signal
+    ax2 = axes[1]
+    ax2.plot(time_axis, filtered_subset, 'g-', linewidth=0.8, label='PyWaveClus filtered')
+    ax2.axhline(waveclus_result['threshold'], color='orange', linestyle='--', 
+               label=f'Detection threshold ({waveclus_result["threshold"]:.1f}μV)')
+    ax2.axhline(-waveclus_result['threshold'], color='orange', linestyle='--', alpha=0.5)
+    
+    # Mark PyWaveClus spikes on filtered signal
+    if len(waveclus_spikes) > 0:
+        spike_indices = (waveclus_spikes * sampling_rate).astype(int)
+        if time_window is not None:
+            spike_indices = spike_indices - start_idx
+        
+        valid_indices = (spike_indices >= 0) & (spike_indices < len(filtered_subset))
+        if np.any(valid_indices):
+            spike_values = filtered_subset[spike_indices[valid_indices]]
+            ax2.scatter(waveclus_spikes[valid_indices], spike_values, 
+                       color='red', s=40, zorder=5, alpha=0.8,
+                       label=f'Detected spikes ({len(waveclus_spikes)})')
+    
+    ax2.set_title('PyWaveClus Filtered Signal & Detection', fontweight='bold')
+    ax2.set_ylabel('Amplitude (μV)')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Traditional threshold filtered signal (for comparison)
+    ax3 = axes[2]
+    ax3.plot(time_axis, threshold_filtered, 'b-', linewidth=0.8, label='Threshold filtered')
+    ax3.axhline(threshold_result['threshold'], color='purple', linestyle='--', 
+               label=f'Threshold ({threshold_result["threshold"]:.1f}μV)')
+    
+    # Mark threshold spikes
+    if len(threshold_spikes) > 0:
+        spike_indices = (threshold_spikes * sampling_rate).astype(int)
+        if time_window is not None:
+            spike_indices = spike_indices - start_idx
+        
+        valid_indices = (spike_indices >= 0) & (spike_indices < len(threshold_filtered))
+        if np.any(valid_indices):
+            spike_values = threshold_filtered[spike_indices[valid_indices]]
+            ax3.scatter(threshold_spikes[valid_indices], spike_values, 
+                       color='purple', s=40, zorder=5, alpha=0.8,
+                       label=f'Threshold spikes ({len(threshold_spikes)})')
+    
+    ax3.set_title('Traditional Threshold Detection (Comparison)', fontweight='bold')
+    ax3.set_ylabel('Amplitude (μV)')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    # Plot 4: Spike comparison raster
+    ax4 = axes[3]
+    
+    # PyWaveClus spikes
+    if len(waveclus_spikes) > 0:
+        ax4.eventplot([waveclus_spikes], lineoffsets=[1], linewidths=2, 
+                     colors=['red'], alpha=0.8, label='PyWaveClus')
+    
+    # Threshold spikes
+    if len(threshold_spikes) > 0:
+        ax4.eventplot([threshold_spikes], lineoffsets=[0], linewidths=2, 
+                     colors=['purple'], alpha=0.8, label='Threshold')
+    
+    ax4.set_ylim(-0.5, 1.5)
+    ax4.set_yticks([0, 1])
+    ax4.set_yticklabels(['Threshold', 'PyWaveClus'])
+    ax4.set_title('Spike Detection Comparison', fontweight='bold')
+    ax4.set_xlabel('Time (s)')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    
+    # Set consistent x-axis limits
+    if time_window is not None:
+        xlim = time_window
+    else:
+        xlim = (0, duration)
+    
+    for ax in axes:
+        ax.set_xlim(xlim)
+    
+    plt.tight_layout()
+    
+    # Print reliability statistics
+    print(f"\n📊 SPIKE DETECTION RELIABILITY ANALYSIS:")
+    print(f"   Channel: {channel_idx}")
+    print(f"   Time window: {xlim[0]:.1f}-{xlim[1]:.1f}s ({xlim[1]-xlim[0]:.1f}s duration)")
+    print(f"\n🎯 PyWaveClus Results:")
+    print(f"   • Spikes detected: {len(waveclus_spikes)}")
+    print(f"   • Detection threshold: {waveclus_result['threshold']:.1f}μV (MAD-based)")
+    print(f"   • Spike rate: {len(waveclus_spikes)/(xlim[1]-xlim[0]):.1f} spikes/s")
+    print(f"   • Filter: Elliptic 300-8000 Hz")
+    
+    print(f"\n🔍 Traditional Threshold Results:")
+    print(f"   • Spikes detected: {len(threshold_spikes)}")
+    print(f"   • Detection threshold: {threshold_result['threshold']:.1f}μV (RMS-based)")
+    print(f"   • Spike rate: {len(threshold_spikes)/(xlim[1]-xlim[0]):.1f} spikes/s")
+    print(f"   • Filter: Butterworth 400-6000 Hz")
+    
+    # Calculate overlap and differences
+    if len(waveclus_spikes) > 0 and len(threshold_spikes) > 0:
+        # Find matching spikes within 1ms tolerance
+        tolerance = 0.001  # 1ms
+        matches = 0
+        for ws in waveclus_spikes:
+            if np.any(np.abs(threshold_spikes - ws) <= tolerance):
+                matches += 1
+        
+        print(f"\n🔗 Method Comparison:")
+        print(f"   • Matched spikes: {matches}")
+        print(f"   • PyWaveClus unique: {len(waveclus_spikes) - matches}")
+        print(f"   • Threshold unique: {len(threshold_spikes) - matches}")
+        
+        if len(threshold_spikes) > 0:
+            sensitivity = matches / len(threshold_spikes)
+            print(f"   • Sensitivity: {sensitivity:.2%}")
+        
+        if len(waveclus_spikes) > 0:
+            precision = matches / len(waveclus_spikes)
+            print(f"   • Precision: {precision:.2%}")
+    
+    # Assess signal quality
+    signal_std = np.std(signal_subset)
+    noise_level = np.median(np.abs(signal_subset)) / 0.6745  # MAD-based noise estimate
+    snr = signal_std / noise_level
+    
+    print(f"\n📡 Signal Quality Assessment:")
+    print(f"   • Signal STD: {signal_std:.1f}μV")
+    print(f"   • Noise level (MAD): {noise_level:.1f}μV")
+    print(f"   • Signal-to-noise ratio: {snr:.1f}")
+    
+    if snr > 3:
+        quality = "Excellent"
+    elif snr > 2:
+        quality = "Good"
+    elif snr > 1.5:
+        quality = "Fair"
+    else:
+        quality = "Poor"
+    
+    print(f"   • Quality assessment: {quality}")
+    
+    plt.show()

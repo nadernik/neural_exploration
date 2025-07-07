@@ -18,6 +18,39 @@ except ImportError:
     print("Neo library not available. Please install with: pip install neo")
 
 
+def load_trial_data(trial_number: int, sampling_rate: int = 30000, h5_file: str = None):
+    """
+    Load neural data for a specific trial.
+    
+    This is a convenience function that wraps the NeuralFeatureExtractor's load_trial_data method.
+    
+    Parameters:
+    -----------
+    trial_number : int
+        Trial number to load
+    sampling_rate : int, optional
+        Sampling rate in Hz (default: 30000)
+    h5_file : str, optional
+        Path to H5 file. If None, will try to find it automatically
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing neural data and metadata
+    """
+    from neural_feature_extraction import NeuralFeatureExtractor, find_h5_file
+    
+    # Use provided h5_file or find it automatically
+    if h5_file is None:
+        h5_file = find_h5_file()
+    
+    # Create extractor instance
+    extractor = NeuralFeatureExtractor(sampling_rate=sampling_rate)
+    
+    # Load and return trial data
+    return extractor.load_trial_data(h5_file, trial_number)
+
+
 class DataLoader:
     """
     Class for loading and preprocessing neural and behavioral data.
