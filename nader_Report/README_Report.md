@@ -12,6 +12,7 @@ This folder contains the complete analysis pipeline and findings for the neural 
 
 ### 📊 Main Findings Report
 - **`Neural_Data_Exploration_Findings_Report.md`** - Comprehensive findings report with all results, methodology, and conclusions
+- **`Neural_Data_Exploration_Report.html`** - Interactive HTML report with embedded visualizations and analysis figures
 
 ### 🔧 Core Processing Scripts
 - **`precise_time_alignment.py`** - Main neural-behavioral data integration script (RECOMMENDED)
