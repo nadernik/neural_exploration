@@ -19,6 +19,115 @@ from neural_feature_extraction import NeuralFeatureExtractor
 from utils.spike_detection import SpikeDetector
 from utils.neural_behavioral_alignment import NeuralBehavioralAligner
 
+
+def safe_correlation(x: np.ndarray, y: np.ndarray, method: str = 'pearson') -> float:
+    """
+    Safely calculate correlation with robust error handling.
+    
+    Args:
+        x: First array
+        y: Second array  
+        method: Correlation method ('pearson', 'spearman')
+        
+    Returns:
+        Correlation coefficient (0.0 if calculation fails)
+    """
+    try:
+        # Convert to numpy arrays
+        x = np.array(x, dtype=float)
+        y = np.array(y, dtype=float)
+        
+        # Check for same length
+        if len(x) != len(y):
+            print(f"⚠️  Warning: Arrays have different lengths ({len(x)} vs {len(y)})")
+            return 0.0
+        
+        # Check for sufficient data
+        if len(x) < 3:
+            print("⚠️  Warning: Insufficient data points for correlation")
+            return 0.0
+        
+        # Check for NaN or infinite values
+        if np.any(np.isnan(x)) or np.any(np.isnan(y)):
+            print("⚠️  Warning: NaN values found in correlation data")
+            return 0.0
+        
+        if np.any(np.isinf(x)) or np.any(np.isinf(y)):
+            print("⚠️  Warning: Infinite values found in correlation data")
+            return 0.0
+        
+        # Check for constant arrays (zero variance)
+        if np.var(x) < 1e-12 or np.var(y) < 1e-12:
+            print("⚠️  Warning: One or both arrays have zero variance")
+            return 0.0
+        
+        # Calculate correlation based on method
+        if method == 'pearson':
+            try:
+                corr_matrix = np.corrcoef(x, y)
+                if np.any(np.isnan(corr_matrix)):
+                    return 0.0
+                return corr_matrix[0, 1]
+            except np.linalg.LinAlgError:
+                print("⚠️  Warning: SVD convergence issue in correlation, trying alternative method")
+                # Fallback to manual calculation
+                try:
+                    x_centered = x - np.mean(x)
+                    y_centered = y - np.mean(y)
+                    correlation = np.sum(x_centered * y_centered) / np.sqrt(np.sum(x_centered**2) * np.sum(y_centered**2))
+                    return correlation if not np.isnan(correlation) else 0.0
+                except:
+                    return 0.0
+        
+        elif method == 'spearman':
+            try:
+                from scipy.stats import spearmanr
+                corr, _ = spearmanr(x, y)
+                return corr if not np.isnan(corr) else 0.0
+            except:
+                return 0.0
+        
+        else:
+            print(f"⚠️  Warning: Unknown correlation method '{method}', using pearson")
+            return safe_correlation(x, y, 'pearson')
+            
+    except Exception as e:
+        print(f"⚠️  Warning: Correlation calculation failed: {str(e)}")
+        return 0.0
+
+
+def validate_array(arr: np.ndarray, name: str = "array") -> Tuple[bool, str]:
+    """
+    Validate a numpy array for common numerical issues.
+    
+    Args:
+        arr: Array to validate
+        name: Name of array for error messages
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    try:
+        arr = np.array(arr, dtype=float)
+        
+        if len(arr) == 0:
+            return False, f"{name} is empty"
+        
+        if np.any(np.isnan(arr)):
+            return False, f"{name} contains NaN values"
+        
+        if np.any(np.isinf(arr)):
+            return False, f"{name} contains infinite values"
+        
+        if np.var(arr) < 1e-12:
+            return False, f"{name} has zero variance"
+        
+        return True, ""
+        
+    except Exception as e:
+        return False, f"{name} validation failed: {str(e)}"
+
+
 class FeatureAnalyzer:
     """
     Analyzes neural features extracted from selected spike channels.
@@ -457,78 +566,132 @@ class SpikeAnalyzer:
     
     def analyze_neural_behavioral_correlation(self, analysis_results: Dict) -> Dict:
         """
-        Analyze correlation between neural activity and behavior.
+        Analyze neural-behavioral correlation using spike data.
         
-        Parameters:
-        -----------
-        analysis_results : dict
-            Results from analyze_trial
+        Args:
+            analysis_results: Results from spike analysis
             
         Returns:
-        --------
-        dict
-            Correlation analysis results
+            Dictionary with correlation analysis results
         """
         if not analysis_results['success']:
-            return {'success': False}
-        
-        trial_data = analysis_results['trial_data']
-        firing_rates = analysis_results['firing_rates']
-        
-        # Check if we have behavioral data
-        if (trial_data['velocity_x'] is None or 
-            trial_data['velocity_y'] is None or 
-            len(trial_data['velocity_x']) == 0):
-            return {'success': False, 'reason': 'No behavioral data'}
+            return {'success': False, 'error': 'No valid analysis results'}
         
         try:
-            # Calculate velocity magnitude
-            velocity_magnitude = np.sqrt(trial_data['velocity_x']**2 + trial_data['velocity_y']**2)
+            # Extract data from analysis results
+            firing_rates = analysis_results['firing_rates']
+            spike_data = analysis_results['spike_data']
+            trial_data = analysis_results['trial_data']
+            top_channels = analysis_results['top_channels']
             
-            # Calculate population firing rate
+            # Check if we have behavioral data
+            if (trial_data['velocity_x'] is None or 
+                trial_data['velocity_y'] is None or 
+                len(trial_data['velocity_x']) == 0):
+                return {'success': False, 'error': 'No behavioral data available'}
+            
+            # Calculate velocity magnitude with validation
+            velocity_x = np.array(trial_data['velocity_x'])
+            velocity_y = np.array(trial_data['velocity_y'])
+            
+            # Check for NaN or infinite values
+            if np.any(np.isnan(velocity_x)) or np.any(np.isnan(velocity_y)):
+                return {'success': False, 'error': 'NaN values found in behavioral data'}
+            
+            if np.any(np.isinf(velocity_x)) or np.any(np.isinf(velocity_y)):
+                return {'success': False, 'error': 'Infinite values found in behavioral data'}
+            
+            velocity_magnitude = np.sqrt(velocity_x**2 + velocity_y**2)
+            
+            # Calculate population firing rate with validation
             duration = trial_data['metadata']['duration']
             time_bins = np.linspace(0, duration, len(list(firing_rates.values())[0]))
             
             population_rate = np.zeros(len(time_bins))
+            valid_channels = 0
+            
             for channel, rates in firing_rates.items():
-                population_rate += rates
+                rates_array = np.array(rates)
+                # Check for NaN or infinite values in firing rates
+                if not np.any(np.isnan(rates_array)) and not np.any(np.isinf(rates_array)):
+                    population_rate += rates_array
+                    valid_channels += 1
+            
+            if valid_channels == 0:
+                return {'success': False, 'error': 'No valid firing rate data available'}
             
             # Align behavioral data to neural time bins
-            from scipy.interpolate import interp1d
-            
             if 'behavioral_timestamps' in trial_data:
                 behavioral_time = trial_data['behavioral_timestamps']
             else:
                 behavioral_time = np.linspace(0, duration, len(velocity_magnitude))
             
+            # Interpolate velocity to match neural time bins
+            from scipy.interpolate import interp1d
             if len(velocity_magnitude) > 1:
-                interp_func = interp1d(behavioral_time, velocity_magnitude, 
-                                     kind='linear', bounds_error=False, fill_value=0)
-                velocity_aligned = interp_func(time_bins)
-                
-                # Calculate correlation
-                correlation = np.corrcoef(population_rate, velocity_aligned)[0, 1]
-                
-                # Individual channel correlations
-                channel_correlations = []
-                for channel in analysis_results['top_channels'][:5]:
-                    if channel in firing_rates:
-                        corr = np.corrcoef(firing_rates[channel], velocity_aligned)[0, 1]
-                        channel_correlations.append((channel, corr))
-                
-                return {
-                    'success': True,
-                    'population_correlation': correlation,
-                    'neural_peak': np.max(population_rate),
-                    'velocity_peak': np.max(velocity_aligned),
-                    'time_bins': len(time_bins),
-                    'channel_correlations': channel_correlations
-                }
+                try:
+                    interp_func = interp1d(behavioral_time, velocity_magnitude, 
+                                         kind='linear', bounds_error=False, fill_value=0)
+                    velocity_aligned = interp_func(time_bins)
+                    
+                    # Validate aligned data
+                    if np.any(np.isnan(velocity_aligned)) or np.any(np.isinf(velocity_aligned)):
+                        return {'success': False, 'error': 'NaN/Inf values after interpolation'}
+                    
+                    # Check for constant arrays (zero variance)
+                    if np.var(population_rate) < 1e-12:
+                        return {'success': False, 'error': 'Population firing rate has zero variance'}
+                    
+                    if np.var(velocity_aligned) < 1e-12:
+                        return {'success': False, 'error': 'Velocity data has zero variance'}
+                    
+                    # Calculate population correlation using safe method
+                    population_correlation = safe_correlation(population_rate, velocity_aligned)
+                    
+                    # Individual channel correlations with robust error handling
+                    channel_correlations = []
+                    for channel in top_channels[:10]:  # Top 10 channels
+                        if channel in firing_rates:
+                            channel_rates = np.array(firing_rates[channel])
+                            
+                            # Validate channel data
+                            is_valid, error_msg = validate_array(channel_rates, f"Channel {channel} firing rates")
+                            if not is_valid:
+                                continue
+                            
+                            # Calculate correlation using safe method
+                            corr = safe_correlation(channel_rates, velocity_aligned)
+                            channel_correlations.append((channel, corr))
+                    
+                    # Sort by correlation strength
+                    channel_correlations.sort(key=lambda x: abs(x[1]), reverse=True)
+                    
+                    # Ensure we have at least some results
+                    if len(channel_correlations) == 0:
+                        channel_correlations = [(top_channels[0], 0.0)]
+                    
+                    return {
+                        'success': True,
+                        'population_correlation': population_correlation,
+                        'channel_correlations': channel_correlations,
+                        'velocity_aligned': velocity_aligned,
+                        'population_rate': population_rate,
+                        'time_bins': time_bins,
+                        'stats': {
+                            'neural_peak': np.max(population_rate),
+                            'velocity_peak': np.max(velocity_aligned),
+                            'time_bins_analyzed': len(time_bins),
+                            'valid_channels': valid_channels
+                        }
+                    }
+                    
+                except Exception as interp_error:
+                    return {'success': False, 'error': f'Interpolation failed: {str(interp_error)}'}
             else:
-                return {'success': False, 'reason': 'Insufficient behavioral data'}
+                return {'success': False, 'error': 'Insufficient behavioral data for interpolation'}
                 
         except Exception as e:
-            return {'success': False, 'reason': str(e)}
+            return {'success': False, 'error': f'Correlation analysis failed: {str(e)}'}
 
 
 def print_feature_summary(features: Dict, spike_channels: List[int]):
@@ -750,4 +913,339 @@ def get_trial_quality_score(trial_data: Dict, features: Dict) -> Dict:
     else:
         quality['assessment'] = 'poor'
     
-    return quality 
+    return quality
+
+
+def analyze_channel_detail(analysis_results: Dict, channel: int = None, 
+                          sampling_rate: int = 30000) -> Dict:
+    """
+    Perform detailed analysis of a specific channel with robust error handling.
+    
+    Args:
+        analysis_results: Results from spike analysis
+        channel: Channel to analyze (None for most active)
+        sampling_rate: Sampling rate in Hz
+        
+    Returns:
+        Dictionary with detailed channel analysis
+    """
+    if not analysis_results['success']:
+        return {'success': False, 'error': 'No valid analysis results'}
+    
+    try:
+        # Extract data
+        firing_rates = analysis_results['firing_rates']
+        spike_data = analysis_results['spike_data']
+        top_channels = analysis_results['top_channels']
+        trial_data = analysis_results['trial_data']
+        quality_metrics = analysis_results['quality_metrics']
+        
+        # Select channel
+        if channel is None:
+            channel = top_channels[0]
+        
+        if channel not in firing_rates:
+            return {'success': False, 'error': f'Channel {channel} not found in analysis results'}
+        
+        # Validate firing rate data
+        channel_rates = np.array(firing_rates[channel])
+        is_valid, error_msg = validate_array(channel_rates, f"Channel {channel} firing rates")
+        if not is_valid:
+            return {'success': False, 'error': f'Invalid firing rate data: {error_msg}'}
+        
+        # Calculate statistics
+        time_bins = np.linspace(0, trial_data['metadata']['duration'], len(channel_rates))
+        
+        # Firing rate statistics with safe calculations
+        try:
+            firing_rate_stats = {
+                'mean_rate': np.mean(channel_rates),
+                'max_rate': np.max(channel_rates),
+                'std_rate': np.std(channel_rates),
+                'time_bins': time_bins,
+                'firing_rates': channel_rates
+            }
+        except Exception as e:
+            return {'success': False, 'error': f'Firing rate statistics calculation failed: {str(e)}'}
+        
+        # Spike statistics with robust error handling
+        spike_stats = {}
+        if channel in spike_data:
+            try:
+                spike_times = spike_data[channel]['spike_times']
+                waveforms = spike_data[channel]['spike_waveforms']
+                
+                # Validate spike times
+                if len(spike_times) > 1:
+                    spike_times_sec = spike_times / sampling_rate  # Convert to seconds
+                    isis = np.diff(spike_times) / sampling_rate * 1000  # milliseconds
+                    
+                    # Validate ISIs
+                    if np.any(isis <= 0):
+                        print(f"⚠️  Warning: Non-positive ISIs found in channel {channel}")
+                        isis = isis[isis > 0]  # Remove non-positive ISIs
+                    
+                    spike_stats = {
+                        'n_spikes': len(spike_times),
+                        'spike_times': spike_times_sec,
+                        'isis': isis,
+                        'mean_isi': np.mean(isis) if len(isis) > 0 else 0.0,
+                        'std_isi': np.std(isis) if len(isis) > 0 else 0.0,
+                        'waveforms': waveforms,
+                        'mean_waveform': None
+                    }
+                    
+                    # Calculate mean waveform safely
+                    if len(waveforms) > 0:
+                        try:
+                            waveforms_array = np.array(waveforms)
+                            if not np.any(np.isnan(waveforms_array)) and not np.any(np.isinf(waveforms_array)):
+                                spike_stats['mean_waveform'] = np.mean(waveforms_array, axis=0)
+                        except Exception as wf_error:
+                            print(f"⚠️  Warning: Mean waveform calculation failed for channel {channel}: {str(wf_error)}")
+                            
+            except Exception as spike_error:
+                print(f"⚠️  Warning: Spike statistics calculation failed for channel {channel}: {str(spike_error)}")
+        
+        # Quality metrics with safe access
+        quality_stats = {}
+        try:
+            if channel in quality_metrics['channel'].values:
+                ch_metrics = quality_metrics[quality_metrics['channel'] == channel].iloc[0]
+                quality_stats = {
+                    'n_spikes': ch_metrics['n_spikes'],
+                    'snr': ch_metrics['snr'],
+                    'peak_to_peak': ch_metrics['peak_to_peak'],
+                    'consistency': ch_metrics['consistency']
+                }
+        except Exception as quality_error:
+            print(f"⚠️  Warning: Quality metrics access failed for channel {channel}: {str(quality_error)}")
+        
+        return {
+            'success': True,
+            'channel': channel,
+            'firing_rate_stats': firing_rate_stats,
+            'spike_stats': spike_stats,
+            'quality_stats': quality_stats
+        }
+        
+    except Exception as e:
+        return {'success': False, 'error': f'Channel analysis failed: {str(e)}'}
+
+
+def get_comprehensive_trial_summary(analysis_results: Dict) -> Dict:
+    """
+    Get comprehensive summary of trial analysis results.
+    
+    Args:
+        analysis_results: Results from spike analysis
+        
+    Returns:
+        Dictionary with comprehensive trial summary
+    """
+    if not analysis_results['success']:
+        return {'success': False, 'error': 'No valid analysis results'}
+    
+    try:
+        # Extract data
+        firing_rates = analysis_results['firing_rates']
+        spike_data = analysis_results['spike_data']
+        quality_metrics = analysis_results['quality_metrics']
+        
+        # Calculate summary statistics
+        total_spikes = quality_metrics['n_spikes'].sum()
+        mean_firing_rate = np.mean([np.mean(rates) for rates in firing_rates.values()])
+        high_quality_channels = len(quality_metrics[quality_metrics['snr'] > 3])
+        active_channels = len(quality_metrics[quality_metrics['n_spikes'] > 50])
+        
+        # Top performing channels
+        top_channels_info = []
+        for channel in quality_metrics.nlargest(5, 'n_spikes')['channel']:
+            if channel in firing_rates:
+                ch_metrics = quality_metrics[quality_metrics['channel'] == channel].iloc[0]
+                top_channels_info.append({
+                    'channel': channel,
+                    'n_spikes': ch_metrics['n_spikes'],
+                    'mean_rate': np.mean(firing_rates[channel]),
+                    'max_rate': np.max(firing_rates[channel]),
+                    'snr': ch_metrics['snr']
+                })
+        
+        return {
+            'success': True,
+            'total_spikes': total_spikes,
+            'mean_firing_rate': mean_firing_rate,
+            'high_quality_channels': high_quality_channels,
+            'active_channels': active_channels,
+            'total_channels_analyzed': len(firing_rates),
+            'top_channels': top_channels_info
+        }
+        
+    except Exception as e:
+        return {'success': False, 'error': f'Summary generation failed: {str(e)}'}
+
+
+def run_interactive_exploration(spike_analyzer, trial_number: int, 
+                               original_results: Dict = None) -> Dict:
+    """
+    Run interactive exploration of different trial parameters.
+    
+    Args:
+        spike_analyzer: SpikeAnalyzer instance
+        trial_number: Trial number to explore
+        original_results: Original analysis results for comparison
+        
+    Returns:
+        Dictionary with exploration results
+    """
+    try:
+        # Analyze the exploration trial
+        explore_results = spike_analyzer.analyze_trial(trial_number)
+        
+        if not explore_results['success']:
+            return {'success': False, 'error': explore_results.get('error', 'Unknown error')}
+        
+        # Get summary statistics
+        summary = get_comprehensive_trial_summary(explore_results)
+        
+        # Compare with original if provided
+        comparison = {}
+        if original_results and original_results['success']:
+            original_summary = get_comprehensive_trial_summary(original_results)
+            if original_summary['success']:
+                comparison = {
+                    'spike_diff': summary['total_spikes'] - original_summary['total_spikes'],
+                    'rate_diff': summary['mean_firing_rate'] - original_summary['mean_firing_rate'],
+                    'quality_diff': summary['high_quality_channels'] - original_summary['high_quality_channels']
+                }
+        
+        return {
+            'success': True,
+            'trial_number': trial_number,
+            'analysis_results': explore_results,
+            'summary': summary,
+            'comparison': comparison
+        }
+        
+    except Exception as e:
+        return {'success': False, 'error': f'Interactive exploration failed: {str(e)}'}
+
+
+def diagnose_correlation_issues(analysis_results: Dict) -> Dict:
+    """
+    Diagnose potential issues with data that might cause correlation calculation problems.
+    
+    Args:
+        analysis_results: Results from spike analysis
+        
+    Returns:
+        Dictionary with diagnostic information
+    """
+    diagnostics = {
+        'success': True,
+        'issues_found': [],
+        'warnings': [],
+        'data_quality': {},
+        'recommendations': []
+    }
+    
+    try:
+        if not analysis_results['success']:
+            diagnostics['success'] = False
+            diagnostics['issues_found'].append('Analysis results indicate failure')
+            return diagnostics
+        
+        # Extract data
+        firing_rates = analysis_results['firing_rates']
+        trial_data = analysis_results['trial_data']
+        
+        # Check behavioral data
+        if trial_data['velocity_x'] is None or trial_data['velocity_y'] is None:
+            diagnostics['issues_found'].append('No behavioral data available')
+        else:
+            vel_x = np.array(trial_data['velocity_x'])
+            vel_y = np.array(trial_data['velocity_y'])
+            
+            # Check for NaN/inf in behavioral data
+            if np.any(np.isnan(vel_x)) or np.any(np.isnan(vel_y)):
+                diagnostics['issues_found'].append('NaN values in behavioral data')
+            
+            if np.any(np.isinf(vel_x)) or np.any(np.isinf(vel_y)):
+                diagnostics['issues_found'].append('Infinite values in behavioral data')
+            
+            # Check variance
+            vel_mag = np.sqrt(vel_x**2 + vel_y**2)
+            if np.var(vel_mag) < 1e-12:
+                diagnostics['issues_found'].append('Zero variance in velocity magnitude')
+            
+            diagnostics['data_quality']['behavioral'] = {
+                'velocity_x_range': [np.min(vel_x), np.max(vel_x)],
+                'velocity_y_range': [np.min(vel_y), np.max(vel_y)],
+                'velocity_magnitude_var': np.var(vel_mag),
+                'n_samples': len(vel_x)
+            }
+        
+        # Check neural data
+        neural_issues = 0
+        valid_channels = 0
+        channel_diagnostics = {}
+        
+        for channel, rates in firing_rates.items():
+            rates_array = np.array(rates)
+            channel_diag = {}
+            
+            # Check for NaN/inf
+            has_nan = np.any(np.isnan(rates_array))
+            has_inf = np.any(np.isinf(rates_array))
+            variance = np.var(rates_array)
+            
+            if has_nan:
+                neural_issues += 1
+                diagnostics['warnings'].append(f'Channel {channel}: NaN values in firing rates')
+            
+            if has_inf:
+                neural_issues += 1
+                diagnostics['warnings'].append(f'Channel {channel}: Infinite values in firing rates')
+            
+            if variance < 1e-12:
+                neural_issues += 1
+                diagnostics['warnings'].append(f'Channel {channel}: Zero variance in firing rates')
+            else:
+                valid_channels += 1
+            
+            channel_diag = {
+                'has_nan': has_nan,
+                'has_inf': has_inf,
+                'variance': variance,
+                'mean_rate': np.mean(rates_array),
+                'max_rate': np.max(rates_array),
+                'n_bins': len(rates_array)
+            }
+            channel_diagnostics[channel] = channel_diag
+        
+        diagnostics['data_quality']['neural'] = {
+            'total_channels': len(firing_rates),
+            'valid_channels': valid_channels,
+            'channels_with_issues': neural_issues,
+            'channel_details': channel_diagnostics
+        }
+        
+        # Generate recommendations
+        if len(diagnostics['issues_found']) > 0:
+            diagnostics['recommendations'].append('Fix critical data issues before correlation analysis')
+        
+        if neural_issues > len(firing_rates) / 2:
+            diagnostics['recommendations'].append('More than half of channels have data issues - check spike detection parameters')
+        
+        if valid_channels < 3:
+            diagnostics['recommendations'].append('Too few valid channels for reliable population analysis')
+        
+        if len(diagnostics['warnings']) == 0 and len(diagnostics['issues_found']) == 0:
+            diagnostics['recommendations'].append('Data appears healthy for correlation analysis')
+        
+        return diagnostics
+        
+    except Exception as e:
+        diagnostics['success'] = False
+        diagnostics['issues_found'].append(f'Diagnostic analysis failed: {str(e)}')
+        return diagnostics 
