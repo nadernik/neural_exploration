@@ -990,3 +990,396 @@ def create_utah_array_layout(figsize=(8, 6)):
     
     plt.tight_layout()
     return fig 
+
+# =============================================================================
+# NEURAL FEATURE VISUALIZATION FUNCTIONS
+# =============================================================================
+
+def plot_neural_behavioral_sync(trial_data: dict, features: dict = None, 
+                               spike_channels: list = None, trial_number: int = None,
+                               figsize: tuple = (15, 10)) -> None:
+    """
+    Create synchronized visualization of neural and behavioral data.
+    
+    Args:
+        trial_data: Dictionary containing trial data
+        features: Dictionary containing extracted features (optional)
+        spike_channels: List of spike channel indices
+        trial_number: Trial number for title
+        figsize: Figure size tuple
+    """
+    if trial_number is None:
+        trial_number = trial_data.get('trial_number', 'Unknown')
+    
+    print(f"🎨 Creating synchronized visualization for trial {trial_number}...")
+    
+    # Get data
+    neural_data = trial_data['neural_data']
+    velocity_x = trial_data.get('velocity_x', None)
+    velocity_y = trial_data.get('velocity_y', None)
+    behavioral_timestamps = trial_data.get('behavioral_timestamps', None)
+    duration = trial_data.get('duration', neural_data.shape[1] / 30000)
+    
+    # Check behavioral data availability
+    has_behavioral = (velocity_x is not None and velocity_y is not None)
+    
+    if not has_behavioral:
+        print("⚠️  No behavioral data found - showing neural data only")
+        velocity_x = np.zeros(100)
+        velocity_y = np.zeros(100)
+        behavioral_timestamps = None
+    
+    # Create time axes
+    neural_time = np.linspace(0, duration, neural_data.shape[1])
+    
+    if behavioral_timestamps is not None and len(behavioral_timestamps) > 0:
+        behavioral_time = behavioral_timestamps - behavioral_timestamps[0]
+    else:
+        behavioral_time = np.linspace(0, duration, len(velocity_x))
+    
+    # Select channels for visualization
+    if spike_channels is None:
+        spike_channels = list(range(min(8, neural_data.shape[0])))
+    
+    np.random.seed(42)
+    n_channels_to_plot = min(6, len(spike_channels))
+    if len(spike_channels) > n_channels_to_plot:
+        selected_channel_indices = np.random.choice(len(spike_channels), n_channels_to_plot, replace=False)
+        selected_channels = [spike_channels[i] for i in selected_channel_indices]
+    else:
+        selected_channels = spike_channels[:n_channels_to_plot]
+    
+    # Create figure
+    fig, axes = plt.subplots(n_channels_to_plot + 1, 1, figsize=figsize)
+    fig.suptitle(f'Trial {trial_number} - Neural & Behavioral Data\n' +
+                f'Outcome: {trial_data.get("outcome", "Unknown")} | ' +
+                f'Duration: {duration:.2f}s', fontsize=14, fontweight='bold')
+    
+    # Plot behavioral data (top subplot)
+    ax_behavior = axes[0]
+    
+    if has_behavioral:
+        ax_behavior.plot(behavioral_time, velocity_x, 'b-', linewidth=2, label='Velocity X', alpha=0.8)
+        ax_behavior.plot(behavioral_time, velocity_y, 'r-', linewidth=2, label='Velocity Y', alpha=0.8)
+        
+        # Plot velocity magnitude
+        velocity_magnitude = np.sqrt(velocity_x**2 + velocity_y**2)
+        ax_behavior.plot(behavioral_time, velocity_magnitude, 'k--', linewidth=2, 
+                        label='Magnitude', alpha=0.6)
+        
+        ax_behavior.set_title('🕹️ Behavioral Velocity', fontweight='bold')
+        ax_behavior.legend(loc='upper right')
+        
+        # Add statistics
+        vel_stats = f'Peak: X={np.max(np.abs(velocity_x)):.2f}, Y={np.max(np.abs(velocity_y)):.2f}'
+        ax_behavior.text(0.02, 0.95, vel_stats, transform=ax_behavior.transAxes, 
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
+                        fontsize=9, verticalalignment='top')
+    else:
+        ax_behavior.text(0.5, 0.5, 'No Behavioral Data Available', 
+                        transform=ax_behavior.transAxes, ha='center', va='center',
+                        fontsize=14, alpha=0.7)
+        ax_behavior.set_title('⚠️ No Behavioral Data', fontweight='bold')
+    
+    ax_behavior.set_ylabel('Velocity')
+    ax_behavior.grid(True, alpha=0.3)
+    ax_behavior.set_xlim(0, duration)
+    
+    # Plot neural data (remaining subplots)
+    for i, ch_num in enumerate(selected_channels):
+        ax = axes[i + 1]
+        
+        # Get neural signal
+        if ch_num < neural_data.shape[0]:
+            neural_signal = neural_data[ch_num, :]
+        else:
+            neural_signal = np.zeros(neural_data.shape[1])
+            print(f"⚠️ Channel {ch_num} exceeds available channels")
+        
+        # Plot neural signal
+        ax.plot(neural_time, neural_signal, 'purple', linewidth=0.8, alpha=0.7)
+        
+        # Add statistics
+        signal_std = np.std(neural_signal)
+        signal_range = np.ptp(neural_signal)
+        
+        ax.set_ylabel(f'Ch {ch_num}\n(μV)', fontweight='bold', fontsize=10)
+        ax.set_title(f'🧠 Neural Channel {ch_num} | σ={signal_std:.1f}, range={signal_range:.1f}', 
+                    fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, duration)
+        
+        # Only show x-axis label on bottom subplot
+        if i == len(selected_channels) - 1:
+            ax.set_xlabel('Time (seconds)', fontweight='bold')
+        else:
+            ax.set_xticks([])
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Print summary
+    print(f"\n📊 Trial {trial_number} Summary:")
+    print(f"   Neural data: {neural_data.shape[0]} channels, {neural_data.shape[1]} samples")
+    
+    if has_behavioral:
+        print(f"   Behavioral data: {len(velocity_x)} samples")
+        print(f"   Velocity peaks: X={np.max(np.abs(velocity_x)):.3f}, Y={np.max(np.abs(velocity_y)):.3f}")
+    else:
+        print(f"   Behavioral data: Not available")
+
+
+def plot_feature_overview(features: dict, spike_channels: list, trial_number: int = None,
+                         n_channels: int = 8, figsize: tuple = (15, 10)) -> None:
+    """
+    Create a quick visualization of the main neural features.
+    
+    Args:
+        features: Dictionary containing extracted features
+        spike_channels: List of spike channel indices
+        trial_number: Trial number for title
+        n_channels: Number of channels to display
+        figsize: Figure size tuple
+    """
+    if features is None:
+        print("❌ No features to plot")
+        return
+    
+    if trial_number is None:
+        trial_number = "Unknown"
+    
+    # Get data
+    time_axis = features['spike_band']['time_axis']
+    spike_rms = features['spike_band']['rms_power']
+    lfp_power = features['lfp']['lfp_power']
+    gamma_power = features['lfp']['gamma_power']
+    crossings = features['threshold']['crossing_counts']
+    
+    # Create figure
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    fig.suptitle(f'Neural Features - Trial {trial_number}', fontsize=16, fontweight='bold')
+    
+    # Plot 1: Spike Band Power
+    ax1 = axes[0, 0]
+    for i in range(min(n_channels, len(spike_channels))):
+        ax1.plot(time_axis, spike_rms[i], label=f'Ch {spike_channels[i]}', alpha=0.7)
+    ax1.set_title('Spike Band Power (400-6000 Hz)')
+    ax1.set_xlabel('Time (s)')
+    ax1.set_ylabel('RMS Power')
+    ax1.legend(fontsize=8)
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: LFP Power
+    ax2 = axes[0, 1]
+    for i in range(min(n_channels, len(spike_channels))):
+        ax2.plot(time_axis, lfp_power[i], label=f'Ch {spike_channels[i]}', alpha=0.7)
+    ax2.set_title('LFP Power (<250 Hz)')
+    ax2.set_xlabel('Time (s)')
+    ax2.set_ylabel('Power')
+    ax2.legend(fontsize=8)
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Gamma Power
+    ax3 = axes[1, 0]
+    for i in range(min(n_channels, len(spike_channels))):
+        ax3.plot(time_axis, gamma_power[i], label=f'Ch {spike_channels[i]}', alpha=0.7)
+    ax3.set_title('Gamma Power (30-100 Hz)')
+    ax3.set_xlabel('Time (s)')
+    ax3.set_ylabel('Power')
+    ax3.legend(fontsize=8)
+    ax3.grid(True, alpha=0.3)
+    
+    # Plot 4: Threshold Crossings
+    ax4 = axes[1, 1]
+    for i in range(min(n_channels, len(spike_channels))):
+        ax4.plot(time_axis, crossings[i], label=f'Ch {spike_channels[i]}', alpha=0.7)
+    ax4.set_title('Threshold Crossings')
+    ax4.set_xlabel('Time (s)')
+    ax4.set_ylabel('Count per bin')
+    ax4.legend(fontsize=8)
+    ax4.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_channel_comparison(features: dict, spike_channels: list, 
+                          channel_list: list, figsize: tuple = (12, 8)) -> None:
+    """
+    Compare features across multiple specific channels.
+    
+    Args:
+        features: Dictionary containing extracted features
+        spike_channels: List of all spike channel indices
+        channel_list: List of specific channels to compare
+        figsize: Figure size tuple
+    """
+    if features is None:
+        print("❌ No features to compare")
+        return
+    
+    # Find indices of requested channels
+    channel_indices = []
+    valid_channels = []
+    for ch_num in channel_list:
+        try:
+            idx = spike_channels.index(ch_num)
+            channel_indices.append(idx)
+            valid_channels.append(ch_num)
+        except ValueError:
+            print(f"⚠️ Channel {ch_num} not in spike channels list")
+    
+    if not channel_indices:
+        print("❌ No valid channels to compare")
+        return
+    
+    # Get data
+    time_axis = features['spike_band']['time_axis']
+    spike_rms = features['spike_band']['rms_power']
+    lfp_power = features['lfp']['lfp_power']
+    gamma_power = features['lfp']['gamma_power']
+    crossings = features['threshold']['crossing_counts']
+    
+    # Create figure
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    fig.suptitle(f'Channel Comparison: {valid_channels}', fontsize=16, fontweight='bold')
+    
+    # Create color map
+    colors = plt.cm.viridis(np.linspace(0, 1, len(valid_channels)))
+    
+    # Plot comparisons
+    for i, (ch_idx, ch_num) in enumerate(zip(channel_indices, valid_channels)):
+        color = colors[i]
+        
+        # Spike band power
+        axes[0, 0].plot(time_axis, spike_rms[ch_idx], 
+                       color=color, label=f'Ch {ch_num}', linewidth=2)
+        
+        # LFP power
+        axes[0, 1].plot(time_axis, lfp_power[ch_idx], 
+                       color=color, label=f'Ch {ch_num}', linewidth=2)
+        
+        # Gamma power
+        axes[1, 0].plot(time_axis, gamma_power[ch_idx], 
+                       color=color, label=f'Ch {ch_num}', linewidth=2)
+        
+        # Threshold crossings
+        axes[1, 1].plot(time_axis, crossings[ch_idx], 
+                       color=color, label=f'Ch {ch_num}', linewidth=2)
+    
+    # Set titles and labels
+    axes[0, 0].set_title('Spike Band Power')
+    axes[0, 0].set_ylabel('RMS Power')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    axes[0, 1].set_title('LFP Power')
+    axes[0, 1].set_ylabel('Power')
+    axes[0, 1].legend()
+    axes[0, 1].grid(True, alpha=0.3)
+    
+    axes[1, 0].set_title('Gamma Power')
+    axes[1, 0].set_xlabel('Time (s)')
+    axes[1, 0].set_ylabel('Power')
+    axes[1, 0].legend()
+    axes[1, 0].grid(True, alpha=0.3)
+    
+    axes[1, 1].set_title('Threshold Crossings')
+    axes[1, 1].set_xlabel('Time (s)')
+    axes[1, 1].set_ylabel('Count per bin')
+    axes[1, 1].legend()
+    axes[1, 1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_channel_detail(features: dict, spike_channels: list, 
+                       channel_number: int, figsize: tuple = (12, 8)) -> None:
+    """
+    Explore all features for a specific channel in detail.
+    
+    Args:
+        features: Dictionary containing extracted features
+        spike_channels: List of spike channel indices
+        channel_number: Specific channel number to analyze
+        figsize: Figure size tuple
+    """
+    if features is None:
+        print("❌ No features to explore")
+        return
+    
+    # Find channel index
+    try:
+        ch_idx = spike_channels.index(channel_number)
+    except ValueError:
+        print(f"❌ Channel {channel_number} not in spike channels list")
+        return
+    
+    # Get data
+    time_axis = features['spike_band']['time_axis']
+    spike_rms = features['spike_band']['rms_power'][ch_idx]
+    lfp_power = features['lfp']['lfp_power'][ch_idx]
+    gamma_power = features['lfp']['gamma_power'][ch_idx]
+    gamma_amp = features['lfp']['gamma_amplitude'][ch_idx]
+    crossings = features['threshold']['crossing_counts'][ch_idx]
+    mov_avg = features['voltage']['moving_average'][ch_idx]
+    mov_var = features['voltage']['moving_variance'][ch_idx]
+    
+    # Create figure
+    fig, axes = plt.subplots(3, 2, figsize=figsize)
+    fig.suptitle(f'Channel {channel_number} - All Features', fontsize=16, fontweight='bold')
+    
+    # Spike band power
+    axes[0, 0].plot(time_axis, spike_rms, 'b-', linewidth=2)
+    axes[0, 0].set_title('Spike Band Power (400-6000 Hz)')
+    axes[0, 0].set_ylabel('RMS Power')
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    # LFP power
+    axes[0, 1].plot(time_axis, lfp_power, 'r-', linewidth=2)
+    axes[0, 1].set_title('LFP Power (<250 Hz)')
+    axes[0, 1].set_ylabel('Power')
+    axes[0, 1].grid(True, alpha=0.3)
+    
+    # Gamma power and amplitude
+    ax1 = axes[1, 0]
+    ax1.plot(time_axis, gamma_power, 'g-', linewidth=2, label='Gamma Power')
+    ax2 = ax1.twinx()
+    ax2.plot(time_axis, gamma_amp, 'orange', linewidth=2, label='Gamma Amplitude')
+    ax1.set_title('Gamma Features (30-100 Hz)')
+    ax1.set_ylabel('Power', color='g')
+    ax2.set_ylabel('Amplitude', color='orange')
+    ax1.grid(True, alpha=0.3)
+    
+    # Threshold crossings
+    axes[1, 1].bar(time_axis, crossings, width=0.8*(time_axis[1]-time_axis[0]), alpha=0.7, color='purple')
+    axes[1, 1].set_title('Threshold Crossings')
+    axes[1, 1].set_ylabel('Count per bin')
+    axes[1, 1].grid(True, alpha=0.3)
+    
+    # Moving average
+    axes[2, 0].plot(time_axis, mov_avg, 'brown', linewidth=2)
+    axes[2, 0].set_title('Moving Average')
+    axes[2, 0].set_xlabel('Time (s)')
+    axes[2, 0].set_ylabel('Voltage')
+    axes[2, 0].grid(True, alpha=0.3)
+    
+    # Moving variance
+    axes[2, 1].plot(time_axis, mov_var, 'pink', linewidth=2)
+    axes[2, 1].set_title('Moving Variance')
+    axes[2, 1].set_xlabel('Time (s)')
+    axes[2, 1].set_ylabel('Variance')
+    axes[2, 1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Print channel statistics
+    print(f"\n📊 Channel {channel_number} Statistics:")
+    print(f"  • Spike RMS Power: {np.mean(spike_rms):.3f} ± {np.std(spike_rms):.3f}")
+    print(f"  • LFP Power: {np.mean(lfp_power):.3f} ± {np.std(lfp_power):.3f}")
+    print(f"  • Gamma Power: {np.mean(gamma_power):.3f} ± {np.std(gamma_power):.3f}")
+    print(f"  • Total Crossings: {np.sum(crossings):.0f}")
+    print(f"  • Moving Average: {np.mean(mov_avg):.3f} ± {np.std(mov_avg):.3f}")
+    print(f"  • Moving Variance: {np.mean(mov_var):.3f} ± {np.std(mov_var):.3f}") 
