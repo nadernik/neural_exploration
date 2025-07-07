@@ -17,7 +17,6 @@ import os
 from scipy import signal
 from scipy.stats import zscore
 import matplotlib.pyplot as plt
-import seaborn as sns
 from typing import Dict, List, Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
@@ -25,6 +24,13 @@ warnings.filterwarnings('ignore')
 # Set matplotlib backend for non-interactive plotting
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
+
+# Set default matplotlib style
+plt.rcParams['figure.facecolor'] = 'white'
+plt.rcParams['axes.facecolor'] = 'white'
+plt.rcParams['axes.edgecolor'] = 'black'
+plt.rcParams['axes.linewidth'] = 0.8
+plt.rcParams['grid.alpha'] = 0.3
 
 # Configuration
 H5_FILE = r'D:\Data\ScienceCorp\trials_aligned.h5'
@@ -401,7 +407,6 @@ class NeuralFeatureExtractor:
         
         # Set up the plot style
         plt.style.use('default')
-        sns.set_palette("husl")
         
         # Create figure with subplots
         fig = plt.figure(figsize=(16, 12))

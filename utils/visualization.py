@@ -6,14 +6,17 @@ Handles behavioral task visualization and neural data plots.
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 from matplotlib.patches import Circle
 import warnings
 warnings.filterwarnings('ignore')
 
 # Set default style
-plt.style.use('seaborn-v0_8')
-sns.set_palette("husl")
+plt.style.use('default')
+plt.rcParams['figure.facecolor'] = 'white'
+plt.rcParams['axes.facecolor'] = 'white'
+plt.rcParams['axes.edgecolor'] = 'black'
+plt.rcParams['axes.linewidth'] = 0.8
+plt.rcParams['grid.alpha'] = 0.3
 
 
 class BehavioralVisualizer:
@@ -256,8 +259,19 @@ class BehavioralVisualizer:
         numeric_cols = self.behavioral_data.select_dtypes(include=[np.number]).columns
         if len(numeric_cols) > 1:
             corr_matrix = self.behavioral_data[numeric_cols].corr()
-            sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', center=0, 
-                       square=True, ax=axes[4])
+            im = axes[4].imshow(corr_matrix, cmap='coolwarm', aspect='auto', vmin=-1, vmax=1)
+            
+            # Add text annotations
+            for i in range(len(corr_matrix)):
+                for j in range(len(corr_matrix.columns)):
+                    text = axes[4].text(j, i, f'{corr_matrix.iloc[i, j]:.2f}',
+                                       ha="center", va="center", color="black", fontsize=8)
+            
+            # Set ticks and labels
+            axes[4].set_xticks(range(len(corr_matrix.columns)))
+            axes[4].set_yticks(range(len(corr_matrix)))
+            axes[4].set_xticklabels(corr_matrix.columns, rotation=45, ha='right', fontsize=8)
+            axes[4].set_yticklabels(corr_matrix.index, fontsize=8)
             axes[4].set_title('Correlation Matrix')
         
         # Plot 6: Missing data pattern
@@ -1129,14 +1143,15 @@ def plot_neural_behavioral_sync(trial_data: dict, features: dict = None,
         print(f"   Behavioral data: Not available")
 
 
-def plot_feature_overview(features: dict, spike_channels: list, trial_number: int = None,
-                         n_channels: int = 8, figsize: tuple = (15, 10)) -> None:
+def plot_feature_overview(features: dict, spike_channels: list, trial_data: dict = None,
+                         trial_number: int = None, n_channels: int = 8, figsize: tuple = (15, 12)) -> None:
     """
-    Create a quick visualization of the main neural features.
+    Create a quick visualization of the main neural features with behavioral data.
     
     Args:
         features: Dictionary containing extracted features
         spike_channels: List of spike channel indices
+        trial_data: Dictionary containing trial data (optional, for behavioral plots)
         trial_number: Trial number for title
         n_channels: Number of channels to display
         figsize: Figure size tuple
@@ -1148,39 +1163,84 @@ def plot_feature_overview(features: dict, spike_channels: list, trial_number: in
     if trial_number is None:
         trial_number = "Unknown"
     
-    # Get data
+    # Get neural feature data
     time_axis = features['spike_band']['time_axis']
     spike_rms = features['spike_band']['rms_power']
     lfp_power = features['lfp']['lfp_power']
     gamma_power = features['lfp']['gamma_power']
     crossings = features['threshold']['crossing_counts']
     
-    # Create figure
-    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    # Get behavioral data if available
+    has_behavioral = False
+    if trial_data is not None:
+        velocity_x = trial_data.get('velocity_x', None)
+        velocity_y = trial_data.get('velocity_y', None)
+        behavioral_timestamps = trial_data.get('behavioral_timestamps', None)
+        duration = trial_data.get('duration', time_axis[-1])
+        
+        has_behavioral = (velocity_x is not None and velocity_y is not None)
+        
+        if has_behavioral:
+            if behavioral_timestamps is not None and len(behavioral_timestamps) > 0:
+                behavioral_time = behavioral_timestamps - behavioral_timestamps[0]
+            else:
+                behavioral_time = np.linspace(0, duration, len(velocity_x))
+    
+    # Create figure with behavioral row on top
+    fig, axes = plt.subplots(3, 2, figsize=figsize)
     fig.suptitle(f'Neural Features - Trial {trial_number}', fontsize=16, fontweight='bold')
     
+    # Plot behavioral data on top row
+    if has_behavioral:
+        # Left column behavioral
+        ax_beh_left = axes[0, 0]
+        ax_beh_left.plot(behavioral_time, velocity_x, 'b-', linewidth=2, label='Velocity X', alpha=0.8)
+        ax_beh_left.plot(behavioral_time, velocity_y, 'r-', linewidth=2, label='Velocity Y', alpha=0.8)
+        velocity_magnitude = np.sqrt(velocity_x**2 + velocity_y**2)
+        ax_beh_left.plot(behavioral_time, velocity_magnitude, 'k--', linewidth=2, label='Magnitude', alpha=0.6)
+        ax_beh_left.set_title('🕹️ Behavioral Velocity', fontweight='bold')
+        ax_beh_left.set_ylabel('Velocity')
+        ax_beh_left.legend(fontsize=8)
+        ax_beh_left.grid(True, alpha=0.3)
+        ax_beh_left.set_xlim(0, duration)
+        
+        # Right column behavioral (duplicate for consistency)
+        ax_beh_right = axes[0, 1]
+        ax_beh_right.plot(behavioral_time, velocity_x, 'b-', linewidth=2, label='Velocity X', alpha=0.8)
+        ax_beh_right.plot(behavioral_time, velocity_y, 'r-', linewidth=2, label='Velocity Y', alpha=0.8)
+        ax_beh_right.plot(behavioral_time, velocity_magnitude, 'k--', linewidth=2, label='Magnitude', alpha=0.6)
+        ax_beh_right.set_title('🕹️ Behavioral Velocity', fontweight='bold')
+        ax_beh_right.set_ylabel('Velocity')
+        ax_beh_right.legend(fontsize=8)
+        ax_beh_right.grid(True, alpha=0.3)
+        ax_beh_right.set_xlim(0, duration)
+    else:
+        # No behavioral data
+        for ax_beh in [axes[0, 0], axes[0, 1]]:
+            ax_beh.text(0.5, 0.5, 'No Behavioral Data', transform=ax_beh.transAxes, 
+                       ha='center', va='center', fontsize=12, alpha=0.7)
+            ax_beh.set_title('⚠️ No Behavioral Data', fontweight='bold')
+    
     # Plot 1: Spike Band Power
-    ax1 = axes[0, 0]
+    ax1 = axes[1, 0]
     for i in range(min(n_channels, len(spike_channels))):
         ax1.plot(time_axis, spike_rms[i], label=f'Ch {spike_channels[i]}', alpha=0.7)
     ax1.set_title('Spike Band Power (400-6000 Hz)')
-    ax1.set_xlabel('Time (s)')
     ax1.set_ylabel('RMS Power')
     ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
     
     # Plot 2: LFP Power
-    ax2 = axes[0, 1]
+    ax2 = axes[1, 1]
     for i in range(min(n_channels, len(spike_channels))):
         ax2.plot(time_axis, lfp_power[i], label=f'Ch {spike_channels[i]}', alpha=0.7)
     ax2.set_title('LFP Power (<250 Hz)')
-    ax2.set_xlabel('Time (s)')
     ax2.set_ylabel('Power')
     ax2.legend(fontsize=8)
     ax2.grid(True, alpha=0.3)
     
     # Plot 3: Gamma Power
-    ax3 = axes[1, 0]
+    ax3 = axes[2, 0]
     for i in range(min(n_channels, len(spike_channels))):
         ax3.plot(time_axis, gamma_power[i], label=f'Ch {spike_channels[i]}', alpha=0.7)
     ax3.set_title('Gamma Power (30-100 Hz)')
@@ -1190,7 +1250,7 @@ def plot_feature_overview(features: dict, spike_channels: list, trial_number: in
     ax3.grid(True, alpha=0.3)
     
     # Plot 4: Threshold Crossings
-    ax4 = axes[1, 1]
+    ax4 = axes[2, 1]
     for i in range(min(n_channels, len(spike_channels))):
         ax4.plot(time_axis, crossings[i], label=f'Ch {spike_channels[i]}', alpha=0.7)
     ax4.set_title('Threshold Crossings')
@@ -1204,14 +1264,15 @@ def plot_feature_overview(features: dict, spike_channels: list, trial_number: in
 
 
 def plot_channel_comparison(features: dict, spike_channels: list, 
-                          channel_list: list, figsize: tuple = (12, 8)) -> None:
+                          channel_list: list, trial_data: dict = None, figsize: tuple = (12, 10)) -> None:
     """
-    Compare features across multiple specific channels.
+    Compare features across multiple specific channels with behavioral data.
     
     Args:
         features: Dictionary containing extracted features
         spike_channels: List of all spike channel indices
         channel_list: List of specific channels to compare
+        trial_data: Dictionary containing trial data (optional, for behavioral plots)
         figsize: Figure size tuple
     """
     if features is None:
@@ -1233,16 +1294,63 @@ def plot_channel_comparison(features: dict, spike_channels: list,
         print("❌ No valid channels to compare")
         return
     
-    # Get data
+    # Get neural feature data
     time_axis = features['spike_band']['time_axis']
     spike_rms = features['spike_band']['rms_power']
     lfp_power = features['lfp']['lfp_power']
     gamma_power = features['lfp']['gamma_power']
     crossings = features['threshold']['crossing_counts']
     
-    # Create figure
-    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    # Get behavioral data if available
+    has_behavioral = False
+    if trial_data is not None:
+        velocity_x = trial_data.get('velocity_x', None)
+        velocity_y = trial_data.get('velocity_y', None)
+        behavioral_timestamps = trial_data.get('behavioral_timestamps', None)
+        duration = trial_data.get('duration', time_axis[-1])
+        
+        has_behavioral = (velocity_x is not None and velocity_y is not None)
+        
+        if has_behavioral:
+            if behavioral_timestamps is not None and len(behavioral_timestamps) > 0:
+                behavioral_time = behavioral_timestamps - behavioral_timestamps[0]
+            else:
+                behavioral_time = np.linspace(0, duration, len(velocity_x))
+    
+    # Create figure with behavioral row on top
+    fig, axes = plt.subplots(3, 2, figsize=figsize)
     fig.suptitle(f'Channel Comparison: {valid_channels}', fontsize=16, fontweight='bold')
+    
+    # Plot behavioral data on top row
+    if has_behavioral:
+        # Left column behavioral
+        ax_beh_left = axes[0, 0]
+        ax_beh_left.plot(behavioral_time, velocity_x, 'b-', linewidth=2, label='Velocity X', alpha=0.8)
+        ax_beh_left.plot(behavioral_time, velocity_y, 'r-', linewidth=2, label='Velocity Y', alpha=0.8)
+        velocity_magnitude = np.sqrt(velocity_x**2 + velocity_y**2)
+        ax_beh_left.plot(behavioral_time, velocity_magnitude, 'k--', linewidth=2, label='Magnitude', alpha=0.6)
+        ax_beh_left.set_title('🕹️ Behavioral Velocity', fontweight='bold')
+        ax_beh_left.set_ylabel('Velocity')
+        ax_beh_left.legend(fontsize=8)
+        ax_beh_left.grid(True, alpha=0.3)
+        ax_beh_left.set_xlim(0, duration)
+        
+        # Right column behavioral (duplicate for consistency)
+        ax_beh_right = axes[0, 1]
+        ax_beh_right.plot(behavioral_time, velocity_x, 'b-', linewidth=2, label='Velocity X', alpha=0.8)
+        ax_beh_right.plot(behavioral_time, velocity_y, 'r-', linewidth=2, label='Velocity Y', alpha=0.8)
+        ax_beh_right.plot(behavioral_time, velocity_magnitude, 'k--', linewidth=2, label='Magnitude', alpha=0.6)
+        ax_beh_right.set_title('🕹️ Behavioral Velocity', fontweight='bold')
+        ax_beh_right.set_ylabel('Velocity')
+        ax_beh_right.legend(fontsize=8)
+        ax_beh_right.grid(True, alpha=0.3)
+        ax_beh_right.set_xlim(0, duration)
+    else:
+        # No behavioral data
+        for ax_beh in [axes[0, 0], axes[0, 1]]:
+            ax_beh.text(0.5, 0.5, 'No Behavioral Data', transform=ax_beh.transAxes, 
+                       ha='center', va='center', fontsize=12, alpha=0.7)
+            ax_beh.set_title('⚠️ No Behavioral Data', fontweight='bold')
     
     # Create color map
     colors = plt.cm.viridis(np.linspace(0, 1, len(valid_channels)))
@@ -1252,57 +1360,58 @@ def plot_channel_comparison(features: dict, spike_channels: list,
         color = colors[i]
         
         # Spike band power
-        axes[0, 0].plot(time_axis, spike_rms[ch_idx], 
+        axes[1, 0].plot(time_axis, spike_rms[ch_idx], 
                        color=color, label=f'Ch {ch_num}', linewidth=2)
         
         # LFP power
-        axes[0, 1].plot(time_axis, lfp_power[ch_idx], 
+        axes[1, 1].plot(time_axis, lfp_power[ch_idx], 
                        color=color, label=f'Ch {ch_num}', linewidth=2)
         
         # Gamma power
-        axes[1, 0].plot(time_axis, gamma_power[ch_idx], 
+        axes[2, 0].plot(time_axis, gamma_power[ch_idx], 
                        color=color, label=f'Ch {ch_num}', linewidth=2)
         
         # Threshold crossings
-        axes[1, 1].plot(time_axis, crossings[ch_idx], 
+        axes[2, 1].plot(time_axis, crossings[ch_idx], 
                        color=color, label=f'Ch {ch_num}', linewidth=2)
     
     # Set titles and labels
-    axes[0, 0].set_title('Spike Band Power')
-    axes[0, 0].set_ylabel('RMS Power')
-    axes[0, 0].legend()
-    axes[0, 0].grid(True, alpha=0.3)
-    
-    axes[0, 1].set_title('LFP Power')
-    axes[0, 1].set_ylabel('Power')
-    axes[0, 1].legend()
-    axes[0, 1].grid(True, alpha=0.3)
-    
-    axes[1, 0].set_title('Gamma Power')
-    axes[1, 0].set_xlabel('Time (s)')
-    axes[1, 0].set_ylabel('Power')
+    axes[1, 0].set_title('Spike Band Power')
+    axes[1, 0].set_ylabel('RMS Power')
     axes[1, 0].legend()
     axes[1, 0].grid(True, alpha=0.3)
     
-    axes[1, 1].set_title('Threshold Crossings')
-    axes[1, 1].set_xlabel('Time (s)')
-    axes[1, 1].set_ylabel('Count per bin')
+    axes[1, 1].set_title('LFP Power')
+    axes[1, 1].set_ylabel('Power')
     axes[1, 1].legend()
     axes[1, 1].grid(True, alpha=0.3)
+    
+    axes[2, 0].set_title('Gamma Power')
+    axes[2, 0].set_xlabel('Time (s)')
+    axes[2, 0].set_ylabel('Power')
+    axes[2, 0].legend()
+    axes[2, 0].grid(True, alpha=0.3)
+    
+    axes[2, 1].set_title('Threshold Crossings')
+    axes[2, 1].set_xlabel('Time (s)')
+    axes[2, 1].set_ylabel('Count per bin')
+    axes[2, 1].legend()
+    axes[2, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
     plt.show()
 
 
 def plot_channel_detail(features: dict, spike_channels: list, 
-                       channel_number: int, figsize: tuple = (12, 8)) -> None:
+                       channel_number: int, trial_data: dict = None, figsize: tuple = (12, 10)) -> None:
     """
-    Explore all features for a specific channel in detail.
+    Explore all features for a specific channel in detail with behavioral data.
     
     Args:
         features: Dictionary containing extracted features
         spike_channels: List of spike channel indices
         channel_number: Specific channel number to analyze
+        trial_data: Dictionary containing trial data (optional, for behavioral plots)
         figsize: Figure size tuple
     """
     if features is None:
@@ -1316,7 +1425,7 @@ def plot_channel_detail(features: dict, spike_channels: list,
         print(f"❌ Channel {channel_number} not in spike channels list")
         return
     
-    # Get data
+    # Get neural feature data
     time_axis = features['spike_band']['time_axis']
     spike_rms = features['spike_band']['rms_power'][ch_idx]
     lfp_power = features['lfp']['lfp_power'][ch_idx]
@@ -1326,24 +1435,71 @@ def plot_channel_detail(features: dict, spike_channels: list,
     mov_avg = features['voltage']['moving_average'][ch_idx]
     mov_var = features['voltage']['moving_variance'][ch_idx]
     
-    # Create figure
-    fig, axes = plt.subplots(3, 2, figsize=figsize)
+    # Get behavioral data if available
+    has_behavioral = False
+    if trial_data is not None:
+        velocity_x = trial_data.get('velocity_x', None)
+        velocity_y = trial_data.get('velocity_y', None)
+        behavioral_timestamps = trial_data.get('behavioral_timestamps', None)
+        duration = trial_data.get('duration', time_axis[-1])
+        
+        has_behavioral = (velocity_x is not None and velocity_y is not None)
+        
+        if has_behavioral:
+            if behavioral_timestamps is not None and len(behavioral_timestamps) > 0:
+                behavioral_time = behavioral_timestamps - behavioral_timestamps[0]
+            else:
+                behavioral_time = np.linspace(0, duration, len(velocity_x))
+    
+    # Create figure with behavioral row on top
+    fig, axes = plt.subplots(4, 2, figsize=figsize)
     fig.suptitle(f'Channel {channel_number} - All Features', fontsize=16, fontweight='bold')
     
+    # Plot behavioral data on top row
+    if has_behavioral:
+        # Left column behavioral
+        ax_beh_left = axes[0, 0]
+        ax_beh_left.plot(behavioral_time, velocity_x, 'b-', linewidth=2, label='Velocity X', alpha=0.8)
+        ax_beh_left.plot(behavioral_time, velocity_y, 'r-', linewidth=2, label='Velocity Y', alpha=0.8)
+        velocity_magnitude = np.sqrt(velocity_x**2 + velocity_y**2)
+        ax_beh_left.plot(behavioral_time, velocity_magnitude, 'k--', linewidth=2, label='Magnitude', alpha=0.6)
+        ax_beh_left.set_title('🕹️ Behavioral Velocity', fontweight='bold')
+        ax_beh_left.set_ylabel('Velocity')
+        ax_beh_left.legend(fontsize=8)
+        ax_beh_left.grid(True, alpha=0.3)
+        ax_beh_left.set_xlim(0, duration)
+        
+        # Right column behavioral (duplicate for consistency)
+        ax_beh_right = axes[0, 1]
+        ax_beh_right.plot(behavioral_time, velocity_x, 'b-', linewidth=2, label='Velocity X', alpha=0.8)
+        ax_beh_right.plot(behavioral_time, velocity_y, 'r-', linewidth=2, label='Velocity Y', alpha=0.8)
+        ax_beh_right.plot(behavioral_time, velocity_magnitude, 'k--', linewidth=2, label='Magnitude', alpha=0.6)
+        ax_beh_right.set_title('🕹️ Behavioral Velocity', fontweight='bold')
+        ax_beh_right.set_ylabel('Velocity')
+        ax_beh_right.legend(fontsize=8)
+        ax_beh_right.grid(True, alpha=0.3)
+        ax_beh_right.set_xlim(0, duration)
+    else:
+        # No behavioral data
+        for ax_beh in [axes[0, 0], axes[0, 1]]:
+            ax_beh.text(0.5, 0.5, 'No Behavioral Data', transform=ax_beh.transAxes, 
+                       ha='center', va='center', fontsize=12, alpha=0.7)
+            ax_beh.set_title('⚠️ No Behavioral Data', fontweight='bold')
+    
     # Spike band power
-    axes[0, 0].plot(time_axis, spike_rms, 'b-', linewidth=2)
-    axes[0, 0].set_title('Spike Band Power (400-6000 Hz)')
-    axes[0, 0].set_ylabel('RMS Power')
-    axes[0, 0].grid(True, alpha=0.3)
+    axes[1, 0].plot(time_axis, spike_rms, 'b-', linewidth=2)
+    axes[1, 0].set_title('Spike Band Power (400-6000 Hz)')
+    axes[1, 0].set_ylabel('RMS Power')
+    axes[1, 0].grid(True, alpha=0.3)
     
     # LFP power
-    axes[0, 1].plot(time_axis, lfp_power, 'r-', linewidth=2)
-    axes[0, 1].set_title('LFP Power (<250 Hz)')
-    axes[0, 1].set_ylabel('Power')
-    axes[0, 1].grid(True, alpha=0.3)
+    axes[1, 1].plot(time_axis, lfp_power, 'r-', linewidth=2)
+    axes[1, 1].set_title('LFP Power (<250 Hz)')
+    axes[1, 1].set_ylabel('Power')
+    axes[1, 1].grid(True, alpha=0.3)
     
     # Gamma power and amplitude
-    ax1 = axes[1, 0]
+    ax1 = axes[2, 0]
     ax1.plot(time_axis, gamma_power, 'g-', linewidth=2, label='Gamma Power')
     ax2 = ax1.twinx()
     ax2.plot(time_axis, gamma_amp, 'orange', linewidth=2, label='Gamma Amplitude')
@@ -1353,24 +1509,24 @@ def plot_channel_detail(features: dict, spike_channels: list,
     ax1.grid(True, alpha=0.3)
     
     # Threshold crossings
-    axes[1, 1].bar(time_axis, crossings, width=0.8*(time_axis[1]-time_axis[0]), alpha=0.7, color='purple')
-    axes[1, 1].set_title('Threshold Crossings')
-    axes[1, 1].set_ylabel('Count per bin')
-    axes[1, 1].grid(True, alpha=0.3)
+    axes[2, 1].bar(time_axis, crossings, width=0.8*(time_axis[1]-time_axis[0]), alpha=0.7, color='purple')
+    axes[2, 1].set_title('Threshold Crossings')
+    axes[2, 1].set_ylabel('Count per bin')
+    axes[2, 1].grid(True, alpha=0.3)
     
     # Moving average
-    axes[2, 0].plot(time_axis, mov_avg, 'brown', linewidth=2)
-    axes[2, 0].set_title('Moving Average')
-    axes[2, 0].set_xlabel('Time (s)')
-    axes[2, 0].set_ylabel('Voltage')
-    axes[2, 0].grid(True, alpha=0.3)
+    axes[3, 0].plot(time_axis, mov_avg, 'brown', linewidth=2)
+    axes[3, 0].set_title('Moving Average')
+    axes[3, 0].set_xlabel('Time (s)')
+    axes[3, 0].set_ylabel('Voltage')
+    axes[3, 0].grid(True, alpha=0.3)
     
     # Moving variance
-    axes[2, 1].plot(time_axis, mov_var, 'pink', linewidth=2)
-    axes[2, 1].set_title('Moving Variance')
-    axes[2, 1].set_xlabel('Time (s)')
-    axes[2, 1].set_ylabel('Variance')
-    axes[2, 1].grid(True, alpha=0.3)
+    axes[3, 1].plot(time_axis, mov_var, 'pink', linewidth=2)
+    axes[3, 1].set_title('Moving Variance')
+    axes[3, 1].set_xlabel('Time (s)')
+    axes[3, 1].set_ylabel('Variance')
+    axes[3, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
     plt.show()
@@ -1382,4 +1538,628 @@ def plot_channel_detail(features: dict, spike_channels: list,
     print(f"  • Gamma Power: {np.mean(gamma_power):.3f} ± {np.std(gamma_power):.3f}")
     print(f"  • Total Crossings: {np.sum(crossings):.0f}")
     print(f"  • Moving Average: {np.mean(mov_avg):.3f} ± {np.std(mov_avg):.3f}")
-    print(f"  • Moving Variance: {np.mean(mov_var):.3f} ± {np.std(mov_var):.3f}") 
+    print(f"  • Moving Variance: {np.mean(mov_var):.3f} ± {np.std(mov_var):.3f}")
+
+
+def plot_behavior_raster_psth(trial_data: dict, spike_channels: list, trial_number: int = None,
+                             threshold_multiplier: float = -4.0, psth_bin_size: float = 0.01,
+                             psth_sigma: float = 0.02, sampling_rate: int = 30000,
+                             raster_plot_type: str = 'vertline', figsize: tuple = (15, 12)) -> None:
+    """
+    Create a 3x1 plot showing behavioral velocity, spike raster, and PSTH.
+    Enhanced with improved raster plot implementation.
+    
+    Args:
+        trial_data: Dictionary containing trial data
+        spike_channels: List of spike channel indices
+        trial_number: Trial number for title
+        threshold_multiplier: Spike detection threshold (-4.0 = -4x RMS)
+        psth_bin_size: PSTH bin size in seconds
+        psth_sigma: Gaussian smoothing sigma for PSTH in seconds
+        sampling_rate: Neural data sampling rate in Hz
+        raster_plot_type: Type of raster plot ('horzline', 'vertline', 'scatter')
+        figsize: Figure size tuple
+    """
+    if trial_number is None:
+        trial_number = trial_data.get('trial_number', 'Unknown')
+    
+    print(f"🎨 Creating enhanced behavior-raster-PSTH plot for trial {trial_number}...")
+    
+    # Get data
+    neural_data = trial_data['neural_data']
+    velocity_x = trial_data.get('velocity_x', None)
+    velocity_y = trial_data.get('velocity_y', None)
+    behavioral_timestamps = trial_data.get('behavioral_timestamps', None)
+    duration = trial_data.get('duration', neural_data.shape[1] / sampling_rate)
+    
+    # Check behavioral data availability
+    has_behavioral = (velocity_x is not None and velocity_y is not None)
+    
+    if not has_behavioral:
+        print("⚠️  No behavioral data found - showing neural data only")
+        velocity_x = np.zeros(100)
+        velocity_y = np.zeros(100)
+        behavioral_timestamps = None
+    
+    # Create time axes
+    neural_time = np.linspace(0, duration, neural_data.shape[1])
+    
+    if behavioral_timestamps is not None and len(behavioral_timestamps) > 0:
+        behavioral_time = behavioral_timestamps - behavioral_timestamps[0]
+    else:
+        behavioral_time = np.linspace(0, duration, len(velocity_x))
+    
+    # Detect spikes using improved method
+    print("🔍 Detecting spikes for enhanced raster plot...")
+    spike_times_by_channel = []
+    all_spike_times = []
+    
+    for i, ch_num in enumerate(spike_channels):
+        if ch_num < neural_data.shape[0]:
+            signal = neural_data[ch_num, :]
+            
+            # Calculate threshold
+            rms = np.sqrt(np.mean(signal**2))
+            threshold = threshold_multiplier * rms
+            
+            # Find threshold crossings (negative-going spikes)
+            if threshold_multiplier < 0:
+                spike_indices = np.where((signal[:-1] > threshold) & (signal[1:] <= threshold))[0]
+            else:
+                spike_indices = np.where((signal[:-1] < threshold) & (signal[1:] >= threshold))[0]
+            
+            # Convert to time
+            spike_times = spike_indices / sampling_rate
+            spike_times_by_channel.append(spike_times)
+            all_spike_times.extend(spike_times)
+        else:
+            spike_times_by_channel.append(np.array([]))
+    
+    # Create PSTH
+    print("📊 Computing PSTH...")
+    psth_bin_edges = np.arange(0, duration + psth_bin_size, psth_bin_size)
+    psth_counts, _ = np.histogram(all_spike_times, bins=psth_bin_edges)
+    psth_centers = (psth_bin_edges[:-1] + psth_bin_edges[1:]) / 2
+    
+    # Smooth PSTH with Gaussian kernel
+    if psth_sigma > 0:
+        from scipy import ndimage
+        sigma_bins = psth_sigma / psth_bin_size
+        psth_smoothed = ndimage.gaussian_filter1d(psth_counts.astype(float), sigma_bins)
+    else:
+        psth_smoothed = psth_counts.astype(float)
+    
+    # Convert to firing rate (spikes/sec)
+    psth_rate = psth_smoothed / (len(spike_channels) * psth_bin_size)
+    
+    # Create figure
+    fig, axes = plt.subplots(3, 1, figsize=figsize, gridspec_kw={'height_ratios': [1, 2, 1]})
+    fig.suptitle(f'Trial {trial_number} - Enhanced Behavior, Raster & PSTH\n' +
+                f'Outcome: {trial_data.get("outcome", "Unknown")} | ' +
+                f'Duration: {duration:.2f}s | {len(spike_channels)} channels', 
+                fontsize=14, fontweight='bold')
+    
+    # Plot 1: Behavioral Velocity (Top)
+    ax_behavior = axes[0]
+    
+    if has_behavioral:
+        ax_behavior.plot(behavioral_time, velocity_x, 'b-', linewidth=2, label='Velocity X', alpha=0.8)
+        ax_behavior.plot(behavioral_time, velocity_y, 'r-', linewidth=2, label='Velocity Y', alpha=0.8)
+        
+        # Plot velocity magnitude
+        velocity_magnitude = np.sqrt(velocity_x**2 + velocity_y**2)
+        ax_behavior.plot(behavioral_time, velocity_magnitude, 'k--', linewidth=2, 
+                        label='Magnitude', alpha=0.6)
+        
+        ax_behavior.set_title('🕹️ Behavioral Velocity', fontweight='bold', fontsize=12)
+        ax_behavior.legend(loc='upper right', fontsize=9)
+        
+        # Add statistics
+        vel_stats = f'Peak: X={np.max(np.abs(velocity_x)):.2f}, Y={np.max(np.abs(velocity_y)):.2f}'
+        ax_behavior.text(0.02, 0.95, vel_stats, transform=ax_behavior.transAxes, 
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
+                        fontsize=8, verticalalignment='top')
+    else:
+        ax_behavior.text(0.5, 0.5, 'No Behavioral Data Available', 
+                        transform=ax_behavior.transAxes, ha='center', va='center',
+                        fontsize=12, alpha=0.7)
+        ax_behavior.set_title('⚠️ No Behavioral Data', fontweight='bold', fontsize=12)
+    
+    ax_behavior.set_ylabel('Velocity', fontweight='bold')
+    ax_behavior.grid(True, alpha=0.3)
+    ax_behavior.set_xlim(0, duration)
+    ax_behavior.set_xticks([])  # Remove x-axis labels
+    
+    # Plot 2: Enhanced Spike Raster (Middle)
+    ax_raster = axes[1]
+    
+    print(f"🎯 Creating enhanced {raster_plot_type} raster plot...")
+    
+    # Use the enhanced raster plot function
+    x_points, y_points = plot_spike_raster(
+        spike_times_by_channel,
+        trial_numbers=spike_channels,
+        plot_type=raster_plot_type,
+        spike_duration=0.001,  # 1ms spike duration
+        xlim_for_spikes=[0, duration],
+        auto_label=False,
+        ax=ax_raster
+    )
+    
+    ax_raster.set_title(f'🎯 Enhanced Spike Raster Plot ({raster_plot_type}) - {len(spike_channels)} channels', 
+                       fontweight='bold', fontsize=12)
+    ax_raster.set_ylabel('Channel Index', fontweight='bold')
+    ax_raster.set_xlim(0, duration)
+    ax_raster.set_xticks([])  # Remove x-axis labels
+    
+    # Add channel labels on y-axis
+    if len(spike_channels) <= 20:  # Only show labels if not too many channels
+        ax_raster.set_yticks(range(1, len(spike_channels) + 1))
+        ax_raster.set_yticklabels([f'Ch{ch}' for ch in spike_channels], fontsize=8)
+    else:
+        # Show fewer ticks for many channels
+        tick_indices = np.linspace(1, len(spike_channels), 10, dtype=int)
+        ax_raster.set_yticks(tick_indices)
+        ax_raster.set_yticklabels([f'Ch{spike_channels[i-1]}' for i in tick_indices], fontsize=8)
+    
+    # Add spike count statistics
+    total_spikes = len(all_spike_times)
+    avg_rate = total_spikes / (duration * len(spike_channels))
+    spike_stats = f'Total spikes: {total_spikes}, Avg rate: {avg_rate:.1f} Hz/ch'
+    ax_raster.text(0.02, 0.95, spike_stats, transform=ax_raster.transAxes, 
+                  bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
+                  fontsize=8, verticalalignment='top')
+    
+    # Plot 3: PSTH (Bottom)
+    ax_psth = axes[2]
+    
+    ax_psth.plot(psth_centers, psth_rate, 'purple', linewidth=2, alpha=0.8)
+    ax_psth.fill_between(psth_centers, psth_rate, alpha=0.3, color='purple')
+    
+    ax_psth.set_title(f'📊 Population PSTH (smoothed σ={psth_sigma*1000:.0f}ms)', 
+                     fontweight='bold', fontsize=12)
+    ax_psth.set_xlabel('Time (seconds)', fontweight='bold')
+    ax_psth.set_ylabel('Firing Rate\n(spikes/s/ch)', fontweight='bold')
+    ax_psth.grid(True, alpha=0.3)
+    ax_psth.set_xlim(0, duration)
+    
+    # Add PSTH statistics
+    max_rate = np.max(psth_rate)
+    mean_rate = np.mean(psth_rate)
+    psth_stats = f'Peak: {max_rate:.1f} Hz/ch, Mean: {mean_rate:.1f} Hz/ch'
+    ax_psth.text(0.02, 0.95, psth_stats, transform=ax_psth.transAxes, 
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
+                fontsize=8, verticalalignment='top')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Print summary
+    print(f"\n📊 Enhanced Trial {trial_number} Summary:")
+    print(f"   Neural data: {neural_data.shape[0]} channels, {neural_data.shape[1]} samples")
+    print(f"   Spike detection: {total_spikes} spikes detected")
+    print(f"   Average firing rate: {avg_rate:.2f} Hz per channel")
+    print(f"   Raster plot type: {raster_plot_type}")
+    print(f"   PSTH resolution: {psth_bin_size*1000:.1f}ms bins, smoothed with σ={psth_sigma*1000:.0f}ms")
+    
+    if has_behavioral:
+        print(f"   Behavioral data: {len(velocity_x)} samples")
+        print(f"   Velocity peaks: X={np.max(np.abs(velocity_x)):.3f}, Y={np.max(np.abs(velocity_y)):.3f}")
+    else:
+        print(f"   Behavioral data: Not available")
+    
+    # Find most active channels
+    spike_counts_per_channel = [len(times) for times in spike_times_by_channel]
+    most_active_indices = np.argsort(spike_counts_per_channel)[-5:][::-1]
+    most_active = [(spike_channels[i], spike_counts_per_channel[i]) for i in most_active_indices]
+    print(f"   Most active channels: {[f'Ch{ch}({count})' for ch, count in most_active]}")
+
+
+def plot_multi_trial_raster_comparison(trial_data_list: list, spike_channels: list, 
+                                     trial_numbers: list = None, threshold_multiplier: float = -4.0,
+                                     sampling_rate: int = 30000, figsize: tuple = (15, 10)) -> None:
+    """
+    Compare raster plots across multiple trials.
+    
+    Args:
+        trial_data_list: List of trial data dictionaries
+        spike_channels: List of spike channel indices
+        trial_numbers: List of trial numbers for titles
+        threshold_multiplier: Spike detection threshold (-4.0 = -4x RMS)
+        sampling_rate: Neural data sampling rate in Hz
+        figsize: Figure size tuple
+    """
+    n_trials = len(trial_data_list)
+    if trial_numbers is None:
+        trial_numbers = [f"Trial {i+1}" for i in range(n_trials)]
+    
+    print(f"🎨 Creating multi-trial raster comparison for {n_trials} trials...")
+    
+    # Create figure
+    fig, axes = plt.subplots(n_trials, 1, figsize=figsize, sharex=True)
+    if n_trials == 1:
+        axes = [axes]  # Make it a list for consistency
+    
+    fig.suptitle(f'Multi-Trial Raster Comparison ({len(spike_channels)} channels)', 
+                fontsize=14, fontweight='bold')
+    
+    colors = plt.cm.viridis(np.linspace(0, 1, len(spike_channels)))
+    
+    for trial_idx, (trial_data, trial_num) in enumerate(zip(trial_data_list, trial_numbers)):
+        ax = axes[trial_idx]
+        
+        # Get data
+        neural_data = trial_data['neural_data']
+        duration = trial_data.get('duration', neural_data.shape[1] / sampling_rate)
+        outcome = trial_data.get('outcome', 'Unknown')
+        
+        # Detect spikes
+        spike_times_by_channel = {}
+        all_spike_times = []
+        
+        for i, ch_num in enumerate(spike_channels):
+            if ch_num < neural_data.shape[0]:
+                signal = neural_data[ch_num, :]
+                
+                # Calculate threshold
+                rms = np.sqrt(np.mean(signal**2))
+                threshold = threshold_multiplier * rms
+                
+                # Find threshold crossings
+                if threshold_multiplier < 0:
+                    spike_indices = np.where((signal[:-1] > threshold) & (signal[1:] <= threshold))[0]
+                else:
+                    spike_indices = np.where((signal[:-1] < threshold) & (signal[1:] >= threshold))[0]
+                
+                # Convert to time
+                spike_times = spike_indices / sampling_rate
+                spike_times_by_channel[ch_num] = spike_times
+                all_spike_times.extend(spike_times)
+        
+        # Plot raster
+        for i, ch_num in enumerate(spike_channels):
+            if ch_num in spike_times_by_channel:
+                spike_times = spike_times_by_channel[ch_num]
+                if len(spike_times) > 0:
+                    y_pos = np.full_like(spike_times, i)
+                    ax.scatter(spike_times, y_pos, c=[colors[i]], s=1, alpha=0.7, marker='|')
+        
+        # Format subplot
+        total_spikes = len(all_spike_times)
+        avg_rate = total_spikes / (duration * len(spike_channels)) if duration > 0 else 0
+        
+        ax.set_title(f'{trial_num} | {outcome} | {total_spikes} spikes | {avg_rate:.1f} Hz/ch', 
+                    fontsize=11)
+        ax.set_ylabel('Channel', fontweight='bold', fontsize=10)
+        ax.set_ylim(-0.5, len(spike_channels) - 0.5)
+        ax.set_xlim(0, max([trial_data.get('duration', trial_data['neural_data'].shape[1] / sampling_rate) 
+                           for trial_data in trial_data_list]))
+        ax.grid(True, alpha=0.3)
+        
+        # Only show x-axis labels on bottom plot
+        if trial_idx == n_trials - 1:
+            ax.set_xlabel('Time (seconds)', fontweight='bold')
+        else:
+            ax.set_xticks([])
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print(f"📊 Multi-trial comparison complete for trials: {trial_numbers}") 
+
+
+def plot_spike_raster(spikes, trial_numbers=None, plot_type='horzline', spike_duration=0.001, 
+                     rel_spike_start_time=0.0, vert_spike_position=0.0, vert_spike_height=1.0,
+                     line_format=None, marker_format=None, xlim_for_spikes=None, 
+                     sampling_rate=30000, auto_label=True, figsize=(12, 8), ax=None):
+    """
+    Create efficient spike raster plots supporting multiple input formats and plot types.
+    Based on the excellent MATLAB plotSpikeRaster implementation.
+    
+    Args:
+        spikes: Either:
+            - 2D numpy array (M trials x N time bins) of binary spike data
+            - List of M arrays, each containing spike times for a trial
+            - Dict with 'spike_times' key containing list of spike time arrays
+        trial_numbers: List of trial numbers for labels (optional)
+        plot_type: Type of plot ('horzline', 'vertline', 'scatter', 'horzline2', 'vertline2')
+        spike_duration: Duration of spike marks in seconds
+        rel_spike_start_time: Relative start time offset
+        vert_spike_position: Vertical position offset (0 = centered on trial)
+        vert_spike_height: Height of vertical spikes
+        line_format: Dict with line formatting (color, linewidth, etc.)
+        marker_format: Dict with marker formatting (size, color, etc.)
+        xlim_for_spikes: [min, max] time limits for spike time data
+        sampling_rate: Sampling rate for binary data conversion
+        auto_label: Whether to automatically label axes
+        figsize: Figure size tuple
+        ax: Matplotlib axis to plot on (optional)
+    
+    Returns:
+        tuple: (x_points, y_points) - coordinates used for plotting
+    """
+    
+    # Set default formats
+    if line_format is None:
+        line_format = {'color': [0.2, 0.2, 0.2], 'linewidth': 0.5}
+    if marker_format is None:
+        marker_format = {'s': 1, 'c': [0.2, 0.2, 0.2], 'alpha': 0.7}
+    
+    # Handle different input formats
+    if isinstance(spikes, dict):
+        # Extract spike times from dict
+        spike_times = spikes.get('spike_times', [])
+        is_binary = False
+    elif isinstance(spikes, list):
+        # List of spike time arrays
+        spike_times = spikes
+        is_binary = False
+    elif isinstance(spikes, np.ndarray):
+        if spikes.dtype == bool or np.all(np.isin(spikes, [0, 1])):
+            # Binary spike data
+            is_binary = True
+            spike_data = spikes.astype(bool)
+        else:
+            # Assume it's spike time data
+            spike_times = [spikes[i] for i in range(spikes.shape[0])]
+            is_binary = False
+    else:
+        raise ValueError("Invalid spike data format")
+    
+    # Create figure if needed
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    
+    # Process binary vs spike time data
+    if is_binary:
+        n_trials, n_time_bins = spike_data.shape
+        time_per_bin = 1.0 / sampling_rate
+        
+        # Convert parameters to bin units
+        spike_duration_bins = spike_duration / time_per_bin
+        rel_start_bins = rel_spike_start_time / time_per_bin
+        
+        # Set axis limits
+        ax.set_xlim(rel_start_bins, n_time_bins + rel_start_bins)
+        ax.set_ylim(0, n_trials + 1)
+        
+        # Generate plot based on type
+        if plot_type == 'horzline':
+            x_points, y_points = _plot_binary_horzline(
+                spike_data, spike_duration_bins, rel_start_bins, vert_spike_position)
+        elif plot_type == 'vertline':
+            x_points, y_points = _plot_binary_vertline(
+                spike_data, rel_start_bins, vert_spike_position, vert_spike_height)
+        elif plot_type == 'scatter':
+            x_points, y_points = _plot_binary_scatter(
+                spike_data, rel_start_bins, vert_spike_position)
+        elif plot_type == 'horzline2':
+            x_points, y_points = _plot_binary_horzline2(
+                spike_data, spike_duration_bins, rel_start_bins, vert_spike_position)
+        elif plot_type == 'vertline2':
+            x_points, y_points = _plot_binary_vertline2(
+                spike_data, rel_start_bins, vert_spike_position, vert_spike_height)
+        else:
+            raise ValueError(f"Unknown plot type: {plot_type}")
+            
+    else:
+        # Spike time data
+        n_trials = len(spike_times)
+        
+        # Determine x-axis limits
+        if xlim_for_spikes is None:
+            all_times = np.concatenate([times for times in spike_times if len(times) > 0])
+            if len(all_times) > 0:
+                time_range = np.max(all_times) - np.min(all_times)
+                padding = 0.0005 * time_range
+                xlim_for_spikes = [np.min(all_times) - padding, np.max(all_times) + padding + spike_duration]
+            else:
+                xlim_for_spikes = [0, 1]
+        
+        ax.set_xlim(xlim_for_spikes)
+        ax.set_ylim(0, n_trials + 1)
+        
+        # Generate plot based on type
+        if plot_type in ['horzline', 'vertline']:
+            x_points, y_points = _plot_spiketime_lines(
+                spike_times, plot_type, spike_duration, rel_spike_start_time, 
+                vert_spike_position, vert_spike_height)
+        elif plot_type == 'scatter':
+            x_points, y_points = _plot_spiketime_scatter(
+                spike_times, rel_spike_start_time, vert_spike_position)
+        else:
+            raise ValueError(f"Plot type {plot_type} not supported for spike time data")
+    
+    # Plot the data
+    if plot_type in ['horzline', 'vertline', 'horzline2', 'vertline2']:
+        ax.plot(x_points, y_points, **line_format)
+    elif plot_type == 'scatter':
+        ax.scatter(x_points, y_points, **marker_format)
+    
+    # Formatting
+    if not is_binary:
+        ax.invert_yaxis()  # Match MATLAB convention for spike times
+    
+    # Labels and trial numbers
+    if trial_numbers is not None:
+        ax.set_yticks(range(1, n_trials + 1))
+        ax.set_yticklabels([f'Trial {num}' for num in trial_numbers])
+    
+    if auto_label:
+        if is_binary:
+            ax.set_xlabel('Time (ms)')
+        else:
+            ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Trial')
+    
+    ax.grid(True, alpha=0.3)
+    
+    return x_points, y_points
+
+
+def _plot_binary_horzline(spike_data, spike_duration_bins, rel_start_bins, vert_spike_position):
+    """Plot horizontal lines for binary spike data."""
+    trials, timebins = np.where(spike_data)
+    
+    x_points = np.column_stack([
+        timebins + rel_start_bins,
+        timebins + rel_start_bins + spike_duration_bins,
+        np.full(len(timebins), np.nan)
+    ]).ravel()
+    
+    y_points = np.column_stack([
+        trials + 1 + vert_spike_position,
+        trials + 1 + vert_spike_position,
+        np.full(len(trials), np.nan)
+    ]).ravel()
+    
+    return x_points, y_points
+
+
+def _plot_binary_vertline(spike_data, rel_start_bins, vert_spike_position, vert_spike_height):
+    """Plot vertical lines for binary spike data."""
+    trials, timebins = np.where(spike_data)
+    half_height = vert_spike_height / 2
+    
+    x_points = np.column_stack([
+        timebins + rel_start_bins,
+        timebins + rel_start_bins,
+        np.full(len(timebins), np.nan)
+    ]).ravel()
+    
+    y_points = np.column_stack([
+        trials + 1 - half_height + vert_spike_position,
+        trials + 1 + half_height + vert_spike_position,
+        np.full(len(trials), np.nan)
+    ]).ravel()
+    
+    return x_points, y_points
+
+
+def _plot_binary_scatter(spike_data, rel_start_bins, vert_spike_position):
+    """Plot scatter points for binary spike data."""
+    trials, timebins = np.where(spike_data)
+    x_points = timebins + rel_start_bins
+    y_points = trials + 1 + vert_spike_position
+    
+    return x_points, y_points
+
+
+def _plot_binary_horzline2(spike_data, spike_duration_bins, rel_start_bins, vert_spike_position):
+    """Optimized horizontal lines for high-density binary data."""
+    n_trials = spike_data.shape[0]
+    x_points = []
+    y_points = []
+    
+    for trial in range(n_trials):
+        if np.any(spike_data[trial, :]):
+            # Find continuous segments of spikes
+            spike_diff = np.diff(np.concatenate([[0], spike_data[trial, :].astype(int), [0]]))
+            start_x = np.where(spike_diff > 0)[0]
+            end_x = np.where(spike_diff < 0)[0]
+            
+            # Create line segments
+            trial_x = np.column_stack([
+                start_x + rel_start_bins,
+                end_x + rel_start_bins + spike_duration_bins - 1,
+                np.full(len(start_x), np.nan)
+            ]).ravel()
+            
+            trial_y = np.full(len(trial_x), trial + 1 + vert_spike_position)
+            
+            x_points.extend(trial_x)
+            y_points.extend(trial_y)
+    
+    return np.array(x_points), np.array(y_points)
+
+
+def _plot_binary_vertline2(spike_data, rel_start_bins, vert_spike_position, vert_spike_height):
+    """Optimized vertical lines for high-density binary data."""
+    n_time_bins = spike_data.shape[1]
+    x_points = []
+    y_points = []
+    
+    for time_bin in range(n_time_bins):
+        if np.any(spike_data[:, time_bin]):
+            # Find continuous segments of trials with spikes
+            spike_diff = np.diff(np.concatenate([[0], spike_data[:, time_bin].astype(int), [0]]))
+            start_y = np.where(spike_diff > 0)[0]
+            end_y = np.where(spike_diff < 0)[0]
+            
+            # Create line segments
+            timebin_y = np.column_stack([
+                start_y + vert_spike_position,
+                end_y + vert_spike_position,
+                np.full(len(start_y), np.nan)
+            ]).ravel()
+            
+            timebin_x = np.full(len(timebin_y), time_bin + rel_start_bins)
+            
+            x_points.extend(timebin_x)
+            y_points.extend(timebin_y)
+    
+    return np.array(x_points), np.array(y_points)
+
+
+def _plot_spiketime_lines(spike_times, plot_type, spike_duration, rel_start_time, 
+                         vert_spike_position, vert_spike_height):
+    """Plot lines for spike time data."""
+    total_spikes = sum(len(times) for times in spike_times)
+    x_points = np.full(total_spikes * 3, np.nan)
+    y_points = np.full(total_spikes * 3, np.nan)
+    
+    current_idx = 0
+    half_height = vert_spike_height / 2
+    
+    for trial, times in enumerate(spike_times):
+        if len(times) == 0:
+            continue
+            
+        n_spikes = len(times)
+        
+        if plot_type == 'horzline':
+            trial_x = np.column_stack([
+                times + rel_start_time,
+                times + rel_start_time + spike_duration,
+                np.full(n_spikes, np.nan)
+            ]).ravel()
+            
+            trial_y = np.column_stack([
+                np.full(n_spikes, trial + 1 + vert_spike_position),
+                np.full(n_spikes, trial + 1 + vert_spike_position),
+                np.full(n_spikes, np.nan)
+            ]).ravel()
+            
+        else:  # vertline
+            trial_x = np.column_stack([
+                times + rel_start_time,
+                times + rel_start_time,
+                np.full(n_spikes, np.nan)
+            ]).ravel()
+            
+            trial_y = np.column_stack([
+                np.full(n_spikes, trial + 1 - half_height + vert_spike_position),
+                np.full(n_spikes, trial + 1 + half_height + vert_spike_position),
+                np.full(n_spikes, np.nan)
+            ]).ravel()
+        
+        # Store points
+        end_idx = current_idx + n_spikes * 3
+        x_points[current_idx:end_idx] = trial_x
+        y_points[current_idx:end_idx] = trial_y
+        current_idx = end_idx
+    
+    return x_points[:current_idx], y_points[:current_idx]
+
+
+def _plot_spiketime_scatter(spike_times, rel_start_time, vert_spike_position):
+    """Plot scatter points for spike time data."""
+    x_points = []
+    y_points = []
+    
+    for trial, times in enumerate(spike_times):
+        if len(times) > 0:
+            x_points.extend(times + rel_start_time)
+            y_points.extend([trial + 1 + vert_spike_position] * len(times))
+    
+    return np.array(x_points), np.array(y_points)
