@@ -77,3 +77,5 @@ Thumbs.db
 .ico
 .webp
 .svg
+
+*.csv
