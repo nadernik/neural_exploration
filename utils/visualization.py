@@ -1547,13 +1547,13 @@ def plot_behavior_raster_psth(trial_data: dict, spike_channels: list, trial_numb
                              raster_plot_type: str = 'vertline', figsize: tuple = (15, 12)) -> None:
     """
     Create a 3x1 plot showing behavioral velocity, spike raster, and PSTH.
-    Enhanced with improved raster plot implementation.
+    Now uses PyWaveClus spike detection for superior accuracy.
     
     Args:
         trial_data: Dictionary containing trial data
         spike_channels: List of spike channel indices
         trial_number: Trial number for title
-        threshold_multiplier: Spike detection threshold (-4.0 = -4x RMS)
+        threshold_multiplier: Legacy parameter (kept for compatibility) - now uses PyWaveClus
         psth_bin_size: PSTH bin size in seconds
         psth_sigma: Gaussian smoothing sigma for PSTH in seconds
         sampling_rate: Neural data sampling rate in Hz
@@ -1589,8 +1589,13 @@ def plot_behavior_raster_psth(trial_data: dict, spike_channels: list, trial_numb
     else:
         behavioral_time = np.linspace(0, duration, len(velocity_x))
     
-    # Detect spikes using improved method
-    print("🔍 Detecting spikes for enhanced raster plot...")
+    # Import PyWaveClus detector
+    from utils.spike_detection import SpikeDetector
+    
+    # Detect spikes using PyWaveClus method (superior accuracy)
+    print("🔍 Detecting spikes using PyWaveClus algorithm...")
+    spike_detector = SpikeDetector(sampling_rate=sampling_rate)
+    
     spike_times_by_channel = []
     all_spike_times = []
     
@@ -1598,20 +1603,16 @@ def plot_behavior_raster_psth(trial_data: dict, spike_channels: list, trial_numb
         if ch_num < neural_data.shape[0]:
             signal = neural_data[ch_num, :]
             
-            # Calculate threshold
-            rms = np.sqrt(np.mean(signal**2))
-            threshold = threshold_multiplier * rms
+            # Use PyWaveClus detection
+            waveclus_result = spike_detector.detect_spikes_waveclus(signal)
+            spike_times = waveclus_result['spike_times']
             
-            # Find threshold crossings (negative-going spikes)
-            if threshold_multiplier < 0:
-                spike_indices = np.where((signal[:-1] > threshold) & (signal[1:] <= threshold))[0]
-            else:
-                spike_indices = np.where((signal[:-1] < threshold) & (signal[1:] >= threshold))[0]
-            
-            # Convert to time
-            spike_times = spike_indices / sampling_rate
             spike_times_by_channel.append(spike_times)
             all_spike_times.extend(spike_times)
+            
+            # Print progress for first few channels
+            if i < 3:
+                print(f"   • Channel {ch_num}: {len(spike_times)} spikes detected (PyWaveClus)")
         else:
             spike_times_by_channel.append(np.array([]))
     
@@ -1686,7 +1687,7 @@ def plot_behavior_raster_psth(trial_data: dict, spike_channels: list, trial_numb
         ax=ax_raster
     )
     
-    ax_raster.set_title(f'🎯 Enhanced Spike Raster Plot ({raster_plot_type}) - {len(spike_channels)} channels', 
+    ax_raster.set_title(f'🎯 PyWaveClus Spike Raster Plot ({raster_plot_type}) - {len(spike_channels)} channels', 
                        fontweight='bold', fontsize=12)
     ax_raster.set_ylabel('Channel Index', fontweight='bold')
     ax_raster.set_xlim(0, duration)
@@ -1759,13 +1760,13 @@ def plot_multi_trial_raster_comparison(trial_data_list: list, spike_channels: li
                                      trial_numbers: list = None, threshold_multiplier: float = -4.0,
                                      sampling_rate: int = 30000, figsize: tuple = (15, 10)) -> None:
     """
-    Compare raster plots across multiple trials.
+    Compare raster plots across multiple trials using PyWaveClus spike detection.
     
     Args:
         trial_data_list: List of trial data dictionaries
         spike_channels: List of spike channel indices
         trial_numbers: List of trial numbers for titles
-        threshold_multiplier: Spike detection threshold (-4.0 = -4x RMS)
+        threshold_multiplier: Legacy parameter (kept for compatibility) - now uses PyWaveClus
         sampling_rate: Neural data sampling rate in Hz
         figsize: Figure size tuple
     """
@@ -1793,7 +1794,11 @@ def plot_multi_trial_raster_comparison(trial_data_list: list, spike_channels: li
         duration = trial_data.get('duration', neural_data.shape[1] / sampling_rate)
         outcome = trial_data.get('outcome', 'Unknown')
         
-        # Detect spikes
+        # Import and use PyWaveClus detection
+        from utils.spike_detection import SpikeDetector
+        spike_detector = SpikeDetector(sampling_rate=sampling_rate)
+        
+        # Detect spikes using PyWaveClus
         spike_times_by_channel = {}
         all_spike_times = []
         
@@ -1801,18 +1806,10 @@ def plot_multi_trial_raster_comparison(trial_data_list: list, spike_channels: li
             if ch_num < neural_data.shape[0]:
                 signal = neural_data[ch_num, :]
                 
-                # Calculate threshold
-                rms = np.sqrt(np.mean(signal**2))
-                threshold = threshold_multiplier * rms
+                # Use PyWaveClus detection
+                waveclus_result = spike_detector.detect_spikes_waveclus(signal)
+                spike_times = waveclus_result['spike_times']
                 
-                # Find threshold crossings
-                if threshold_multiplier < 0:
-                    spike_indices = np.where((signal[:-1] > threshold) & (signal[1:] <= threshold))[0]
-                else:
-                    spike_indices = np.where((signal[:-1] < threshold) & (signal[1:] >= threshold))[0]
-                
-                # Convert to time
-                spike_times = spike_indices / sampling_rate
                 spike_times_by_channel[ch_num] = spike_times
                 all_spike_times.extend(spike_times)
         

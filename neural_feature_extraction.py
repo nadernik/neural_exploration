@@ -309,16 +309,20 @@ class NeuralFeatureExtractor:
     
     def extract_threshold_crossings(self, neural_data: np.ndarray, bin_size: float) -> Dict:
         """
-        Extract thresholded spike counts (threshold crossings per bin).
+        Extract spike counts using PyWaveClus detection (superior to threshold crossings).
         
         Args:
             neural_data: Shape (channels, samples)
             bin_size: Time bin size in seconds
             
         Returns:
-            Dictionary with threshold crossing features
+            Dictionary with PyWaveClus spike detection features
         """
-        print(f"🎯 Extracting threshold crossings ({THRESHOLD_MULTIPLIER}x RMS)...")
+        print(f"🎯 Extracting spikes using PyWaveClus detection...")
+        
+        # Import PyWaveClus detector
+        from utils.spike_detection import SpikeDetector
+        spike_detector = SpikeDetector(sampling_rate=self.fs)
         
         # Create time bins
         bin_edges = self.create_time_bins(neural_data.shape[1], bin_size)
@@ -326,35 +330,37 @@ class NeuralFeatureExtractor:
         
         # Initialize output arrays
         n_channels = neural_data.shape[0]
-        crossing_counts = np.zeros((n_channels, n_bins))
+        spike_counts = np.zeros((n_channels, n_bins))
         thresholds = np.zeros(n_channels)
         
         for ch_idx in range(n_channels):
-            # Calculate threshold (negative, based on RMS)
-            rms = np.sqrt(np.mean(neural_data[ch_idx]**2))
-            threshold = THRESHOLD_MULTIPLIER * rms
-            thresholds[ch_idx] = threshold
+            # Get signal for this channel
+            signal = neural_data[ch_idx, :]
             
-            # Count threshold crossings in each bin
+            # Use PyWaveClus detection
+            waveclus_result = spike_detector.detect_spikes_waveclus(signal)
+            spike_times = waveclus_result['spike_times']
+            thresholds[ch_idx] = waveclus_result['threshold']
+            
+            # Count spikes in each bin
             for bin_idx in range(n_bins):
-                start_idx = bin_edges[bin_idx]
-                end_idx = bin_edges[bin_idx + 1]
+                start_time = bin_edges[bin_idx] / self.fs
+                end_time = bin_edges[bin_idx + 1] / self.fs
                 
-                bin_data = neural_data[ch_idx, start_idx:end_idx]
-                
-                # Count crossings below threshold
-                crossings = np.sum(bin_data < threshold)
-                crossing_counts[ch_idx, bin_idx] = crossings
+                # Count spikes in this time bin
+                bin_spikes = spike_times[(spike_times >= start_time) & (spike_times < end_time)]
+                spike_counts[ch_idx, bin_idx] = len(bin_spikes)
         
         # Create time axis for bins
         time_axis = (bin_edges[:-1] + bin_edges[1:]) / 2 / self.fs
         
         return {
-            'crossing_counts': crossing_counts,
+            'crossing_counts': spike_counts,  # Keep same name for compatibility
             'thresholds': thresholds,
             'time_axis': time_axis,
-            'threshold_multiplier': THRESHOLD_MULTIPLIER,
-            'bin_size_ms': TIME_BIN_SIZE_MS
+            'threshold_multiplier': 'PyWaveClus',  # Indicate method used
+            'bin_size_ms': TIME_BIN_SIZE_MS,
+            'detection_method': 'PyWaveClus'
         }
     
     def extract_all_features(self, neural_data: np.ndarray, selected_channels: List[int], 
@@ -388,7 +394,7 @@ class NeuralFeatureExtractor:
         print("✅ Voltage feature extraction completed")
         
         threshold_features = self.extract_threshold_crossings(selected_data, bin_size)
-        print("✅ Threshold crossing extraction completed")
+        print("✅ PyWaveClus spike detection completed")
         
         return {
             'spike_band': spike_features,
@@ -463,7 +469,7 @@ class NeuralFeatureExtractor:
         
         for i, ch in enumerate(selected_channels[:5]):
             ax4.plot(time_axis, crossing_data[i], label=f'Ch {ch}', alpha=0.7)
-        ax4.set_title('Threshold Crossings')
+        ax4.set_title('PyWaveClus Spikes')
         ax4.set_xlabel('Time (s)')
         ax4.set_ylabel('Count per bin')
         ax4.legend(fontsize=8)
@@ -534,7 +540,7 @@ class NeuralFeatureExtractor:
         print(f"🎯 Spike band: {features['spike_band']['frequency_band']}")
         print(f"🧠 LFP cutoff: {features['lfp']['lfp_cutoff']} Hz")
         print(f"🌊 Gamma band: {features['lfp']['gamma_band']}")
-        print(f"⚡ Threshold: {features['threshold']['threshold_multiplier']}x RMS")
+        print(f"⚡ Spike detection: {features['threshold']['threshold_multiplier']}")
         
         print(f"\n📈 Feature Statistics:")
         print(f"  • Spike RMS Power: {np.mean(spike_mean):.3f} ± {np.std(spike_mean):.3f}")
