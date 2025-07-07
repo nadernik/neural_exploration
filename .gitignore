@@ -61,8 +61,19 @@ ehthumbs.db
 Thumbs.db
 
 # Data files (optional - uncomment if you don't want to track large data files)
-# *.h5
-# *.hdf5
-# *.mat
-# *.npy
-# *.npz 
+*.h5
+*.hdf5
+*.mat
+*.npy
+*.npz 
+
+.png
+.pdf
+.jpg
+.jpeg
+.gif
+.bmp
+.tiff
+.ico
+.webp
+.svg
