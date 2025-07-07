@@ -8,7 +8,7 @@ check behavioral data availability, and validate data quality.
 import numpy as np
 import h5py
 from typing import Dict, List, Optional, Tuple
-from neural_feature_extraction import NeuralFeatureExtractor, find_h5_file
+from neural_feature_extraction import NeuralFeatureExtractor
 
 
 def diagnose_trial_data(trial_number: int, sampling_rate: int = 30000) -> Optional[Dict]:
@@ -25,11 +25,8 @@ def diagnose_trial_data(trial_number: int, sampling_rate: int = 30000) -> Option
     print(f"🔍 DIAGNOSING TRIAL {trial_number} DATA STRUCTURE")
     print("=" * 50)
     
-    # Find H5 file
-    h5_file = find_h5_file()
-    if h5_file is None:
-        print("❌ No H5 files found!")
-        return None
+    # Use hardcoded H5 file path
+    h5_file = r"D:\Data\ScienceCorp\trials_aligned.h5"
     
     print(f"📁 Using H5 file: {h5_file}")
     
@@ -78,10 +75,7 @@ def check_behavioral_data_availability(max_trials: int = 10) -> List[Dict]:
     print(f"\n🔍 CHECKING BEHAVIORAL DATA AVAILABILITY (first {max_trials} trials):")
     print("-" * 50)
     
-    h5_file = find_h5_file()
-    if h5_file is None:
-        print("❌ No H5 files found!")
-        return []
+    h5_file = r"D:\Data\ScienceCorp\trials_aligned.h5"
     
     behavioral_summary = []
     
@@ -156,10 +150,7 @@ def find_trials_with_movement(min_movement_threshold: float = 0.01, max_trials: 
     print(f"\n🔍 FINDING TRIALS WITH MOVEMENT (threshold: {min_movement_threshold}):")
     print("-" * 50)
     
-    h5_file = find_h5_file()
-    if h5_file is None:
-        print("❌ No H5 files found!")
-        return []
+    h5_file = r"D:\Data\ScienceCorp\trials_aligned.h5"
     
     trials_with_movement = []
     

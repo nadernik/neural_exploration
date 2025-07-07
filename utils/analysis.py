@@ -1,48 +1,47 @@
+#!/usr/bin/env python3
 """
 Analysis utilities for neural feature exploration.
 
-This module provides functions for feature analysis, summary statistics,
-channel comparison, and data quality assessment.
+This module provides classes and functions for comprehensive neural signal analysis,
+including feature extraction, quality assessment, and behavioral correlation analysis.
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
+import pandas as pd
 from typing import Dict, List, Tuple, Optional
+import warnings
+warnings.filterwarnings('ignore')
+
+# Import neural feature extraction
 from neural_feature_extraction import NeuralFeatureExtractor
 
+# Import spike detection components
+from utils.spike_detection import SpikeDetector
+from utils.neural_behavioral_alignment import NeuralBehavioralAligner
 
 class FeatureAnalyzer:
-    """Class for analyzing extracted neural features."""
+    """
+    Analyzes neural features extracted from selected spike channels.
+    """
     
     def __init__(self, spike_channels: List[int]):
-        """
-        Initialize the feature analyzer.
-        
-        Args:
-            spike_channels: List of spike channel indices
-        """
         self.spike_channels = spike_channels
-    
+        
     def load_and_extract_features(self, trial_number: int, time_bin_size: float = 0.02, 
                                 sampling_rate: int = 30000) -> Tuple[Optional[Dict], Optional[Dict]]:
         """
-        Load trial data and extract all neural features.
+        Load trial data and extract neural features.
         
         Args:
             trial_number: Trial number to analyze
             time_bin_size: Time bin size in seconds
-            sampling_rate: Neural data sampling rate in Hz
+            sampling_rate: Sampling rate in Hz
             
         Returns:
             Tuple of (trial_data, features) or (None, None) if failed
         """
-        from neural_feature_extraction import find_h5_file
-        
-        # Find H5 file
-        h5_file = find_h5_file()
-        if h5_file is None:
-            print("❌ No H5 files found!")
-            return None, None
+        # Use hardcoded H5 file path
+        h5_file = r"D:\Data\ScienceCorp\trials_aligned.h5"
         
         print(f"📁 Using H5 file: {h5_file}")
         
@@ -326,6 +325,212 @@ class FeatureAnalyzer:
         return comparison
 
 
+class SpikeAnalyzer:
+    """
+    Analyzes neural spikes using spike detection algorithms.
+    """
+    
+    def __init__(self, spike_channels: List[int], 
+                 sampling_rate: float = 30000.0,
+                 threshold_factor: float = 5.0,
+                 spike_window: Tuple[int, int] = (-10, 32),
+                 bin_size: float = 0.05):
+        """
+        Initialize spike analyzer.
+        
+        Parameters:
+        -----------
+        spike_channels : list
+            List of good channel indices
+        sampling_rate : float
+            Sampling rate in Hz
+        threshold_factor : float
+            Spike detection threshold multiplier
+        spike_window : tuple
+            Spike waveform window (start, end) in samples
+        bin_size : float
+            Time bin size for firing rates in seconds
+        """
+        self.spike_channels = spike_channels
+        self.h5_file_path = r"D:\Data\ScienceCorp\trials_aligned.h5"
+        
+        # Initialize spike detector
+        self.spike_detector = SpikeDetector(
+            sampling_rate=sampling_rate,
+            threshold_factor=threshold_factor,
+            spike_window=spike_window,
+            good_channels=spike_channels
+        )
+        
+        # Initialize aligner
+        self.aligner = NeuralBehavioralAligner(
+            bin_size=bin_size,
+            interpolation_method='linear'
+        )
+        
+        print(f"🔍 SpikeAnalyzer initialized:")
+        print(f"  • {len(spike_channels)} channels")
+        print(f"  • {threshold_factor}x threshold")
+        print(f"  • {bin_size*1000:.0f}ms bins")
+    
+    def analyze_trial(self, trial_number: int) -> Dict:
+        """
+        Perform comprehensive spike analysis of a trial.
+        
+        Parameters:
+        -----------
+        trial_number : int
+            Trial number to analyze
+            
+        Returns:
+        --------
+        dict
+            Dictionary containing all analysis results
+        """
+        print(f"🔍 Analyzing trial {trial_number}...")
+        
+        try:
+            # Extract spike features
+            firing_rates = self.spike_detector.extract_features_from_h5(
+                self.h5_file_path, trial_number)
+            
+            # Load trial data
+            trial_data = self.aligner.load_trial_data(
+                self.h5_file_path, trial_number)
+            
+            # Get spike data for quality metrics
+            spike_data = self.spike_detector.detect_spikes_all_channels(
+                trial_data['neural_data'])
+            
+            # Get quality metrics
+            quality_metrics = self.spike_detector.get_channel_quality_metrics(spike_data)
+            
+            # Find most active channels
+            top_channels = quality_metrics.nlargest(10, 'n_spikes')['channel'].tolist()
+            
+            print(f"✅ Trial {trial_number} analysis complete!")
+            
+            return {
+                'trial_data': trial_data,
+                'firing_rates': firing_rates,
+                'spike_data': spike_data,
+                'quality_metrics': quality_metrics,
+                'top_channels': top_channels,
+                'success': True
+            }
+            
+        except Exception as e:
+            print(f"❌ Analysis failed: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def get_summary_statistics(self, analysis_results: Dict) -> Dict:
+        """
+        Generate summary statistics from analysis results.
+        
+        Parameters:
+        -----------
+        analysis_results : dict
+            Results from analyze_trial
+            
+        Returns:
+        --------
+        dict
+            Summary statistics
+        """
+        if not analysis_results['success']:
+            return {}
+        
+        firing_rates = analysis_results['firing_rates']
+        quality_metrics = analysis_results['quality_metrics']
+        
+        summary = {
+            'total_channels': len(firing_rates),
+            'total_spikes': quality_metrics['n_spikes'].sum(),
+            'mean_firing_rate': np.mean([np.mean(rates) for rates in firing_rates.values()]),
+            'high_quality_channels': len(quality_metrics[quality_metrics['snr'] > 3]),
+            'active_channels': len(quality_metrics[quality_metrics['n_spikes'] > 50]),
+            'mean_snr': quality_metrics['snr'].mean(),
+            'top_channels': analysis_results['top_channels'][:5]
+        }
+        
+        return summary
+    
+    def analyze_neural_behavioral_correlation(self, analysis_results: Dict) -> Dict:
+        """
+        Analyze correlation between neural activity and behavior.
+        
+        Parameters:
+        -----------
+        analysis_results : dict
+            Results from analyze_trial
+            
+        Returns:
+        --------
+        dict
+            Correlation analysis results
+        """
+        if not analysis_results['success']:
+            return {'success': False}
+        
+        trial_data = analysis_results['trial_data']
+        firing_rates = analysis_results['firing_rates']
+        
+        # Check if we have behavioral data
+        if (trial_data['velocity_x'] is None or 
+            trial_data['velocity_y'] is None or 
+            len(trial_data['velocity_x']) == 0):
+            return {'success': False, 'reason': 'No behavioral data'}
+        
+        try:
+            # Calculate velocity magnitude
+            velocity_magnitude = np.sqrt(trial_data['velocity_x']**2 + trial_data['velocity_y']**2)
+            
+            # Calculate population firing rate
+            duration = trial_data['metadata']['duration']
+            time_bins = np.linspace(0, duration, len(list(firing_rates.values())[0]))
+            
+            population_rate = np.zeros(len(time_bins))
+            for channel, rates in firing_rates.items():
+                population_rate += rates
+            
+            # Align behavioral data to neural time bins
+            from scipy.interpolate import interp1d
+            
+            if 'behavioral_timestamps' in trial_data:
+                behavioral_time = trial_data['behavioral_timestamps']
+            else:
+                behavioral_time = np.linspace(0, duration, len(velocity_magnitude))
+            
+            if len(velocity_magnitude) > 1:
+                interp_func = interp1d(behavioral_time, velocity_magnitude, 
+                                     kind='linear', bounds_error=False, fill_value=0)
+                velocity_aligned = interp_func(time_bins)
+                
+                # Calculate correlation
+                correlation = np.corrcoef(population_rate, velocity_aligned)[0, 1]
+                
+                # Individual channel correlations
+                channel_correlations = []
+                for channel in analysis_results['top_channels'][:5]:
+                    if channel in firing_rates:
+                        corr = np.corrcoef(firing_rates[channel], velocity_aligned)[0, 1]
+                        channel_correlations.append((channel, corr))
+                
+                return {
+                    'success': True,
+                    'population_correlation': correlation,
+                    'neural_peak': np.max(population_rate),
+                    'velocity_peak': np.max(velocity_aligned),
+                    'time_bins': len(time_bins),
+                    'channel_correlations': channel_correlations
+                }
+            else:
+                return {'success': False, 'reason': 'Insufficient behavioral data'}
+                
+        except Exception as e:
+            return {'success': False, 'reason': str(e)}
+
+
 def print_feature_summary(features: Dict, spike_channels: List[int]):
     """
     Print a formatted summary of extracted features.
@@ -366,6 +571,50 @@ def print_feature_summary(features: Dict, spike_channels: List[int]):
         spike_mean = np.mean(spike_rms[i])
         crossing_sum = np.sum(crossings[i])
         print(f"  • Channel {ch:2d}: Spike={spike_mean:.3f}, Crossings={crossing_sum:.0f}")
+
+
+def print_spike_summary(analysis_results: Dict):
+    """
+    Print a comprehensive summary of spike analysis results.
+    
+    Parameters:
+    -----------
+    analysis_results : dict
+        Results from SpikeAnalyzer.analyze_trial()
+    """
+    if not analysis_results['success']:
+        print(f"❌ Analysis failed: {analysis_results.get('error', 'Unknown error')}")
+        return
+    
+    firing_rates = analysis_results['firing_rates']
+    quality_metrics = analysis_results['quality_metrics']
+    top_channels = analysis_results['top_channels']
+    
+    print("📊 SPIKE ANALYSIS SUMMARY")
+    print("=" * 50)
+    
+    # Basic statistics
+    print(f"🔍 Detection Results:")
+    print(f"   • Total channels analyzed: {len(firing_rates)}")
+    print(f"   • Total spikes detected: {quality_metrics['n_spikes'].sum()}")
+    print(f"   • Mean firing rate: {np.mean([np.mean(rates) for rates in firing_rates.values()]):.1f} Hz")
+    print(f"   • Active channels (>50 spikes): {len(quality_metrics[quality_metrics['n_spikes'] > 50])}")
+    
+    # Quality assessment
+    print(f"\n⭐ Quality Assessment:")
+    print(f"   • Mean SNR: {quality_metrics['snr'].mean():.2f}")
+    print(f"   • High-quality channels (SNR > 3): {len(quality_metrics[quality_metrics['snr'] > 3])}")
+    print(f"   • Mean peak-to-peak amplitude: {quality_metrics['peak_to_peak'].mean():.1f}")
+    
+    # Top channels
+    print(f"\n🏆 Top 5 Most Active Channels:")
+    for i, channel in enumerate(top_channels[:5]):
+        if channel in firing_rates:
+            mean_rate = np.mean(firing_rates[channel])
+            max_rate = np.max(firing_rates[channel])
+            n_spikes = quality_metrics[quality_metrics['channel'] == channel]['n_spikes'].iloc[0]
+            snr = quality_metrics[quality_metrics['channel'] == channel]['snr'].iloc[0]
+            print(f"   {i+1}. Channel {channel}: {n_spikes} spikes, {mean_rate:.1f} Hz (avg), {max_rate:.1f} Hz (peak), SNR: {snr:.1f}")
 
 
 def analyze_behavioral_correlation(trial_data: Dict, features: Dict) -> Dict:

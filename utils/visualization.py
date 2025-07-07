@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
+from typing import Dict, Tuple
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -1111,7 +1112,7 @@ def plot_neural_behavioral_sync(trial_data: dict, features: dict = None,
             print(f"⚠️ Channel {ch_num} exceeds available channels")
         
         # Plot neural signal
-        ax.plot(neural_time, neural_signal, 'purple', linewidth=0.8, alpha=0.7)
+        ax.plot(neural_time, neural_signal, 'black', linewidth=0.8, alpha=1)
         
         # Add statistics
         signal_std = np.std(neural_signal)
@@ -2163,3 +2164,352 @@ def _plot_spiketime_scatter(spike_times, rel_start_time, vert_spike_position):
             y_points.extend([trial + 1 + vert_spike_position] * len(times))
     
     return np.array(x_points), np.array(y_points)
+
+# Spike-based visualization functions
+
+def plot_spike_raster_behavioral(analysis_results: Dict, trial_number: int, figsize: Tuple[float, float] = (15, 12)):
+    """
+    Create a comprehensive spike raster and behavioral visualization.
+    
+    Parameters:
+    -----------
+    analysis_results : dict
+        Results from SpikeAnalyzer.analyze_trial()
+    trial_number : int
+        Trial number for title
+    figsize : tuple
+        Figure size (width, height)
+    """
+    if not analysis_results['success']:
+        print("❌ Cannot create visualization - analysis failed")
+        return
+    
+    trial_data = analysis_results['trial_data']
+    firing_rates = analysis_results['firing_rates']
+    spike_data = analysis_results['spike_data']
+    top_channels = analysis_results['top_channels']
+    
+    fig, axes = plt.subplots(3, 1, figsize=figsize)
+    
+    # Plot 1: Behavioral data (velocity)
+    ax1 = axes[0]
+    if trial_data['velocity_x'] is not None and trial_data['velocity_y'] is not None:
+        # Create time axis for behavioral data
+        if 'behavioral_timestamps' in trial_data:
+            time_behavioral = trial_data['behavioral_timestamps']
+        else:
+            time_behavioral = np.linspace(0, trial_data['metadata']['duration'], len(trial_data['velocity_x']))
+        
+        ax1.plot(time_behavioral, trial_data['velocity_x'], 'b-', label='Velocity X', linewidth=1.5)
+        ax1.plot(time_behavioral, trial_data['velocity_y'], 'r-', label='Velocity Y', linewidth=1.5)
+        ax1.set_ylabel('Velocity (mm/s)')
+        ax1.set_title(f'Trial {trial_number} - Behavioral Data', fontsize=14, fontweight='bold')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Spike raster (top 10 channels)
+    ax2 = axes[1]
+    y_pos = 0
+    colors = plt.cm.viridis(np.linspace(0, 1, len(top_channels[:10])))
+    
+    duration = trial_data['metadata']['duration']
+    sampling_rate = 30000  # Hz
+    
+    for i, channel in enumerate(top_channels[:10]):
+        if channel in spike_data:
+            spike_times = spike_data[channel]['spike_times'] / sampling_rate
+            ax2.scatter(spike_times, np.ones(len(spike_times)) * y_pos, 
+                       c=[colors[i]], s=2, alpha=0.7)
+            y_pos += 1
+    
+    ax2.set_ylabel('Channel')
+    ax2.set_title(f'Spike Raster - Top {min(10, len(top_channels))} Active Channels', fontsize=14, fontweight='bold')
+    ax2.set_yticks(range(len(top_channels[:10])))
+    ax2.set_yticklabels([f'Ch {ch}' for ch in top_channels[:10]])
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Population firing rate
+    ax3 = axes[2]
+    time_bins = np.linspace(0, duration, len(list(firing_rates.values())[0]))
+    
+    # Calculate population firing rate
+    pop_firing_rate = np.zeros(len(time_bins))
+    for channel, rates in firing_rates.items():
+        pop_firing_rate += rates
+    
+    ax3.plot(time_bins, pop_firing_rate, 'k-', linewidth=2, label='Population Rate')
+    ax3.set_xlabel('Time (s)')
+    ax3.set_ylabel('Firing Rate (spikes/s)')
+    ax3.set_title('Population Firing Rate', fontsize=14, fontweight='bold')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print(f"✅ Spike raster visualization complete!")
+    print(f"   • Behavioral data: {len(trial_data['velocity_x'])} samples")
+    print(f"   • Spike raster: {len(top_channels[:10])} channels")
+    print(f"   • Population rate: {len(time_bins)} time bins")
+
+
+def plot_spike_firing_rates(analysis_results: Dict, n_channels: int = 6, figsize: Tuple[float, float] = (15, 12)):
+    """
+    Plot individual channel firing rates.
+    
+    Parameters:
+    -----------
+    analysis_results : dict
+        Results from SpikeAnalyzer.analyze_trial()
+    n_channels : int
+        Number of top channels to plot
+    figsize : tuple
+        Figure size (width, height)
+    """
+    if not analysis_results['success']:
+        print("❌ Cannot create visualization - analysis failed")
+        return
+    
+    firing_rates = analysis_results['firing_rates']
+    top_channels = analysis_results['top_channels']
+    trial_data = analysis_results['trial_data']
+    
+    # Select channels to plot
+    channels_to_plot = top_channels[:n_channels]
+    
+    fig, axes = plt.subplots(3, 2, figsize=figsize)
+    axes = axes.flatten()
+    
+    # Create time axis
+    duration = trial_data['metadata']['duration']
+    time_bins = np.linspace(0, duration, len(list(firing_rates.values())[0]))
+    
+    for i, channel in enumerate(channels_to_plot):
+        ax = axes[i]
+        
+        if channel in firing_rates:
+            # Plot firing rate
+            ax.plot(time_bins, firing_rates[channel], 'b-', linewidth=2, alpha=0.8)
+            ax.set_title(f'Channel {channel} - Firing Rate', fontsize=12, fontweight='bold')
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel('Firing Rate (spikes/s)')
+            ax.grid(True, alpha=0.3)
+            
+            # Add channel statistics
+            mean_rate = np.mean(firing_rates[channel])
+            max_rate = np.max(firing_rates[channel])
+            ax.text(0.02, 0.95, f'Mean: {mean_rate:.1f} Hz\nMax: {max_rate:.1f} Hz', 
+                   transform=ax.transAxes, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        else:
+            ax.text(0.5, 0.5, f'Channel {channel}\nNo Data', 
+                   transform=ax.transAxes, ha='center', va='center')
+            ax.set_title(f'Channel {channel} - No Data', fontsize=12)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print(f"✅ Individual channel analysis complete!")
+    print(f"   • Channels analyzed: {len(channels_to_plot)}")
+
+
+def plot_spike_channel_comparison(analysis_results: Dict, figsize: Tuple[float, float] = (15, 10)):
+    """
+    Create channel comparison and spike statistics plots.
+    
+    Parameters:
+    -----------
+    analysis_results : dict
+        Results from SpikeAnalyzer.analyze_trial()
+    figsize : tuple
+        Figure size (width, height)
+    """
+    if not analysis_results['success']:
+        print("❌ Cannot create visualization - analysis failed")
+        return
+    
+    firing_rates = analysis_results['firing_rates']
+    quality_metrics = analysis_results['quality_metrics']
+    top_channels = analysis_results['top_channels']
+    trial_data = analysis_results['trial_data']
+    
+    # Create comparison plot
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    
+    # Plot 1: Firing rate comparison (top 4 channels)
+    ax1 = axes[0, 0]
+    channels_to_compare = top_channels[:4]
+    
+    for i, channel in enumerate(channels_to_compare):
+        if channel in firing_rates:
+            time_bins = np.linspace(0, trial_data['metadata']['duration'], len(firing_rates[channel]))
+            ax1.plot(time_bins, firing_rates[channel], linewidth=2, 
+                    label=f'Ch {channel}', alpha=0.8)
+    
+    ax1.set_title('Firing Rate Comparison - Top 4 Channels', fontsize=12, fontweight='bold')
+    ax1.set_xlabel('Time (s)')
+    ax1.set_ylabel('Firing Rate (spikes/s)')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Spike count per channel
+    ax2 = axes[0, 1]
+    sorted_metrics = quality_metrics.sort_values('n_spikes', ascending=False)
+    top_10_metrics = sorted_metrics.head(10)
+    
+    bars = ax2.bar(range(len(top_10_metrics)), top_10_metrics['n_spikes'], 
+                   color='skyblue', alpha=0.8)
+    ax2.set_title('Total Spike Count - Top 10 Channels', fontsize=12, fontweight='bold')
+    ax2.set_xlabel('Channel Rank')
+    ax2.set_ylabel('Total Spikes')
+    ax2.set_xticks(range(len(top_10_metrics)))
+    ax2.set_xticklabels([f'Ch {ch}' for ch in top_10_metrics['channel']], rotation=45)
+    
+    # Add value labels on bars
+    for bar, value in zip(bars, top_10_metrics['n_spikes']):
+        ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                f'{int(value)}', ha='center', va='bottom', fontsize=9)
+    
+    # Plot 3: SNR distribution
+    ax3 = axes[1, 0]
+    ax3.hist(quality_metrics['snr'], bins=15, color='lightgreen', alpha=0.7, edgecolor='black')
+    ax3.set_title('Signal-to-Noise Ratio Distribution', fontsize=12, fontweight='bold')
+    ax3.set_xlabel('SNR')
+    ax3.set_ylabel('Number of Channels')
+    ax3.grid(True, alpha=0.3)
+    
+    # Plot 4: Peak-to-peak amplitude vs spike count
+    ax4 = axes[1, 1]
+    scatter = ax4.scatter(quality_metrics['peak_to_peak'], quality_metrics['n_spikes'], 
+                         c=quality_metrics['snr'], cmap='viridis', alpha=0.7)
+    ax4.set_title('Peak-to-Peak Amplitude vs Spike Count', fontsize=12, fontweight='bold')
+    ax4.set_xlabel('Peak-to-Peak Amplitude')
+    ax4.set_ylabel('Total Spikes')
+    ax4.grid(True, alpha=0.3)
+    
+    # Add colorbar
+    cbar = plt.colorbar(scatter, ax=ax4)
+    cbar.set_label('SNR')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print(f"✅ Channel comparison complete!")
+    print(f"   • Channels compared: {len(channels_to_compare)}")
+    print(f"   • Quality metrics: {len(quality_metrics)} channels")
+
+
+def plot_spike_channel_detail(analysis_results: Dict, figsize: Tuple[float, float] = (15, 12)):
+    """
+    Detailed analysis plot of the most active channel.
+    
+    Parameters:
+    -----------
+    analysis_results : dict
+        Results from SpikeAnalyzer.analyze_trial()
+    figsize : tuple
+        Figure size (width, height)
+    """
+    if not analysis_results['success']:
+        print("❌ Cannot create visualization - analysis failed")
+        return
+    
+    firing_rates = analysis_results['firing_rates']
+    spike_data = analysis_results['spike_data']
+    quality_metrics = analysis_results['quality_metrics']
+    top_channels = analysis_results['top_channels']
+    trial_data = analysis_results['trial_data']
+    
+    if not top_channels:
+        print("❌ No active channels found")
+        return
+    
+    most_active_channel = top_channels[0]
+    sampling_rate = 30000  # Hz
+    
+    print(f"📊 Detailed analysis of most active channel: {most_active_channel}")
+    
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    
+    # Plot 1: Firing rate over time
+    ax1 = axes[0, 0]
+    if most_active_channel in firing_rates:
+        time_bins = np.linspace(0, trial_data['metadata']['duration'], len(firing_rates[most_active_channel]))
+        ax1.plot(time_bins, firing_rates[most_active_channel], 'b-', linewidth=2)
+        ax1.set_title(f'Channel {most_active_channel} - Firing Rate', fontsize=12, fontweight='bold')
+        ax1.set_xlabel('Time (s)')
+        ax1.set_ylabel('Firing Rate (spikes/s)')
+        ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Spike waveforms
+    ax2 = axes[0, 1]
+    if most_active_channel in spike_data:
+        waveforms = spike_data[most_active_channel]['spike_waveforms']
+        if len(waveforms) > 0:
+            # Plot individual waveforms (sample)
+            n_sample = min(50, len(waveforms))
+            sample_indices = np.random.choice(len(waveforms), n_sample, replace=False)
+            
+            for i in sample_indices:
+                ax2.plot(waveforms[i], 'gray', alpha=0.3, linewidth=0.5)
+            
+            # Plot mean waveform
+            mean_waveform = np.mean(waveforms, axis=0)
+            ax2.plot(mean_waveform, 'r-', linewidth=3, label='Mean')
+            ax2.set_title(f'Channel {most_active_channel} - Spike Waveforms', fontsize=12, fontweight='bold')
+            ax2.set_xlabel('Sample')
+            ax2.set_ylabel('Amplitude')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Inter-spike interval histogram
+    ax3 = axes[1, 0]
+    if most_active_channel in spike_data:
+        spike_times = spike_data[most_active_channel]['spike_times']
+        if len(spike_times) > 1:
+            isis = np.diff(spike_times) / sampling_rate * 1000  # Convert to milliseconds
+            ax3.hist(isis, bins=50, color='lightblue', alpha=0.7, edgecolor='black')
+            ax3.set_title(f'Channel {most_active_channel} - Inter-Spike Intervals', fontsize=12, fontweight='bold')
+            ax3.set_xlabel('ISI (ms)')
+            ax3.set_ylabel('Count')
+            ax3.grid(True, alpha=0.3)
+            
+            # Add statistics
+            ax3.axvline(np.mean(isis), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(isis):.1f}ms')
+            ax3.legend()
+    
+    # Plot 4: Channel quality metrics
+    ax4 = axes[1, 1]
+    if most_active_channel in quality_metrics['channel'].values:
+        ch_metrics = quality_metrics[quality_metrics['channel'] == most_active_channel].iloc[0]
+        
+        metrics_names = ['Spike Count', 'SNR', 'Peak-to-Peak', 'Consistency']
+        metrics_values = [ch_metrics['n_spikes'], ch_metrics['snr'], 
+                         ch_metrics['peak_to_peak'], ch_metrics['consistency']]
+        
+        # Normalize values for comparison (0-1 scale)
+        normalized_values = []
+        for i, value in enumerate(metrics_values):
+            if i == 0:  # Spike count
+                normalized_values.append(value / quality_metrics['n_spikes'].max())
+            else:
+                max_val = quality_metrics[['snr', 'peak_to_peak', 'consistency']].max().max()
+                normalized_values.append(value / max_val if max_val > 0 else 0)
+        
+        bars = ax4.bar(metrics_names, normalized_values, color=['skyblue', 'lightgreen', 'orange', 'pink'])
+        ax4.set_title(f'Channel {most_active_channel} - Quality Metrics (Normalized)', fontsize=12, fontweight='bold')
+        ax4.set_ylabel('Normalized Value')
+        
+        # Add actual values as text
+        for bar, actual_value in zip(bars, metrics_values):
+            ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                    f'{actual_value:.1f}', ha='center', va='bottom', fontsize=10)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print(f"✅ Detailed analysis complete for channel {most_active_channel}!")
+    if most_active_channel in spike_data:
+        print(f"   • Total spikes: {spike_data[most_active_channel]['n_spikes']}")
+        print(f"   • Mean firing rate: {np.mean(firing_rates[most_active_channel]):.1f} Hz")
+        print(f"   • Peak firing rate: {np.max(firing_rates[most_active_channel]):.1f} Hz")
