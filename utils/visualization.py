@@ -1620,22 +1620,24 @@ def plot_behavior_raster_psth(trial_data: dict, spike_channels: list, trial_numb
         else:
             spike_times_by_channel.append(np.array([]))
     
-    # Create PSTH
-    print("📊 Computing PSTH...")
+    # Create PSTH using advanced kernel smoothing
+    print("📊 Computing PSTH with advanced kernel smoothing...")
     psth_bin_edges = np.arange(0, duration + psth_bin_size, psth_bin_size)
-    psth_counts, _ = np.histogram(all_spike_times, bins=psth_bin_edges)
     psth_centers = (psth_bin_edges[:-1] + psth_bin_edges[1:]) / 2
     
-    # Smooth PSTH with Gaussian kernel
-    if psth_sigma > 0:
-        from scipy import ndimage
-        sigma_bins = psth_sigma / psth_bin_size
-        psth_smoothed = ndimage.gaussian_filter1d(psth_counts.astype(float), sigma_bins)
-    else:
-        psth_smoothed = psth_counts.astype(float)
+    # Create spike matrix for advanced PSTH (single trial, multi-channel)
+    spike_matrix = np.zeros((1, len(psth_centers)))
+    psth_counts, _ = np.histogram(all_spike_times, bins=psth_bin_edges)
+    spike_matrix[0, :] = psth_counts
     
-    # Convert to firing rate (spikes/sec)
-    psth_rate = psth_smoothed / (len(spike_channels) * psth_bin_size)
+    # Use advanced PSTH plotting function
+    psth_rate, _, _, _ = plot_spike_psth(
+        psth_centers, spike_matrix, psth_bin_size, psth_sigma,
+        kernel_type='gauss', plot_error=False, ax=None
+    )
+    
+    # Normalize by number of channels
+    psth_rate = psth_rate / len(spike_channels)
     
     # Create figure
     fig, axes = plt.subplots(3, 1, figsize=figsize, gridspec_kw={'height_ratios': [1, 2, 1]})
@@ -2902,4 +2904,276 @@ def plot_interactive_exploration_comparison(exploration_results: Dict, original_
         print(f"   • Differences: {comparison['spike_diff']} spikes, {comparison['rate_diff']:.1f} Hz")
 
 
-# ... existing code ...
+def plot_spike_psth(time_axis, spike_matrix, bin_size, kernel_width, kernel_type='gauss', 
+                   plot_error=True, color='blue', ax=None, linewidth=3, alpha=0.7):
+    """
+    Plot spike PSTH with various kernel smoothing options.
+    
+    Python implementation of Nader Nikbakht's MATLAB plotSpikePSTH function.
+    
+    Parameters:
+    -----------
+    time_axis : np.ndarray
+        Time axis for the data
+    spike_matrix : np.ndarray
+        Spike matrix (trials x time bins) - can be spike counts or binary
+    bin_size : float
+        Bin size in seconds
+    kernel_width : float
+        Width of the smoothing kernel (reasonable values: 0.025-0.250 s)
+    kernel_type : str
+        Type of kernel ('gauss', 'halfgauss', 'exp', 'epsp')
+    plot_error : bool
+        Whether to plot error bars (SEM)
+    color : str or tuple
+        Color for the plot
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on (if None, creates new figure)
+    linewidth : float
+        Line width for the plot
+    alpha : float
+        Alpha (transparency) for error bars
+        
+    Returns:
+    --------
+    tuple
+        (smoothed_psth, sem, time_axis, ax) - smoothed PSTH, SEM, time axis, and axes
+    """
+    from scipy import stats
+    from scipy import signal
+    import matplotlib.pyplot as plt
+    
+    # Create axes if not provided
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Ensure spike_matrix is 2D (trials x time)
+    if spike_matrix.ndim == 1:
+        spike_matrix = spike_matrix.reshape(1, -1)
+    
+    # Create smoothing kernel based on type
+    if kernel_type == 'gauss':
+        # Gaussian kernel
+        gauss_width = max(11, int(6 * kernel_width / bin_size) + 1)
+        if gauss_width % 2 == 0:  # Make sure it's odd
+            gauss_width += 1
+        
+        kernel_samples = np.arange(-gauss_width//2, gauss_width//2 + 1)
+        kernel = stats.norm.pdf(kernel_samples, 0, kernel_width / bin_size)
+        
+    elif kernel_type == 'halfgauss':
+        # Half Gaussian kernel (right half only)
+        gauss_width = max(11, int(6 * kernel_width / bin_size) + 1)
+        if gauss_width % 2 == 0:
+            gauss_width += 1
+        
+        kernel_samples = np.arange(-gauss_width//2, gauss_width//2 + 1)
+        full_kernel = stats.norm.pdf(kernel_samples, 0, kernel_width / bin_size)
+        kernel = full_kernel[gauss_width//2:]  # Take right half
+        
+    elif kernel_type == 'exp':
+        # Exponential kernel
+        kernel_samples = np.arange(-int(1.0 / bin_size), int(1.0 / bin_size) + 1)
+        kernel = stats.expon.pdf(kernel_samples, scale=kernel_width / bin_size) * bin_size
+        
+    elif kernel_type == 'epsp':
+        # EPSP-like kernel with dual exponential
+        tau_falling = 0.040  # 40ms falling time constant
+        tau_rising = 0.001   # 1ms rising time constant
+        
+        t = np.arange(0, 0.200, bin_size)  # 200ms kernel
+        kernel_falling = stats.expon.pdf(t, scale=tau_falling / bin_size)
+        kernel_rising = stats.expon.pdf(t, scale=tau_rising / bin_size)
+        
+        # EPSP shape: falling * (1 - rising)
+        kernel = kernel_falling * (1 - kernel_rising)
+        kernel = kernel / np.sum(kernel)  # Normalize
+        
+    else:
+        raise ValueError(f"Unknown kernel type: {kernel_type}")
+    
+    # Normalize kernel
+    kernel = kernel / np.sum(kernel)
+    
+    # Calculate mean spike rate across trials
+    spike_matrix_mean = np.mean(spike_matrix, axis=0)
+    
+    # Edge correction factor
+    edge_corr_factor = np.convolve(np.ones_like(spike_matrix_mean), kernel, mode='same')
+    edge_corr_factor = np.maximum(edge_corr_factor, 1e-10)  # Avoid division by zero
+    
+    # Convolve with kernel and apply edge correction
+    smoothed_mean = np.convolve(spike_matrix_mean, kernel, mode='same')
+    
+    # Handle shape mismatch by truncating to the minimum length
+    min_length = min(len(smoothed_mean), len(edge_corr_factor), len(spike_matrix_mean))
+    smoothed_psth = smoothed_mean[:min_length] / (bin_size * edge_corr_factor[:min_length])
+    
+    # Calculate SEM across trials  
+    # Initialize with the same length as smoothed_psth
+    spike_density_trials = np.zeros((spike_matrix.shape[0], len(smoothed_psth)))
+    
+    for i in range(spike_matrix.shape[0]):
+        convolved = np.convolve(spike_matrix[i, :], kernel, mode='same')
+        
+        # Use the same truncation as for smoothed_psth
+        spike_density_trials[i, :] = (convolved[:len(smoothed_psth)] / 
+                                     (bin_size * edge_corr_factor[:len(smoothed_psth)]))
+    
+    sem = np.std(spike_density_trials, axis=0) / np.sqrt(spike_matrix.shape[0])
+    
+    # Handle large SEM values (likely due to edge effects)
+    sem = np.minimum(sem, 100)  # Cap SEM at 100 Hz
+    
+    # Ensure time_axis matches the data length
+    if len(time_axis) != len(smoothed_psth):
+        time_axis = time_axis[:len(smoothed_psth)]
+    
+    # Plot
+    if plot_error:
+        # Plot with error bars using fill_between
+        ax.plot(time_axis, smoothed_psth, color=color, linewidth=linewidth, alpha=0.9)
+        ax.fill_between(time_axis, smoothed_psth - sem[:len(smoothed_psth)], 
+                       smoothed_psth + sem[:len(smoothed_psth)], 
+                       color=color, alpha=alpha, label='SEM')
+    else:
+        ax.plot(time_axis, smoothed_psth, color=color, linewidth=linewidth)
+    
+    # Format plot
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Firing Rate (spikes/s)')
+    ax.grid(True, alpha=0.3)
+    
+    # Add kernel info to title
+    kernel_info = f'{kernel_type} kernel (σ={kernel_width*1000:.1f}ms)'
+    if ax.get_title():
+        ax.set_title(f'{ax.get_title()}\n{kernel_info}')
+    else:
+        ax.set_title(f'Spike PSTH - {kernel_info}')
+    
+    return smoothed_psth, sem, time_axis, ax
+
+
+def plot_multi_condition_psth(spike_data_dict, time_axis, bin_size, kernel_width=0.025, 
+                             kernel_type='gauss', figsize=(12, 8), colors=None):
+    """
+    Plot PSTH for multiple conditions using the advanced kernel smoothing.
+    
+    Parameters:
+    -----------
+    spike_data_dict : dict
+        Dictionary where keys are condition names and values are spike matrices
+    time_axis : np.ndarray
+        Time axis for all conditions
+    bin_size : float
+        Bin size in seconds
+    kernel_width : float
+        Width of the smoothing kernel
+    kernel_type : str
+        Type of kernel ('gauss', 'halfgauss', 'exp', 'epsp')
+    figsize : tuple
+        Figure size
+    colors : list, optional
+        List of colors for each condition
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing PSTH results for each condition
+    """
+    import matplotlib.pyplot as plt
+    
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    if colors is None:
+        colors = plt.cm.tab10(np.linspace(0, 1, len(spike_data_dict)))
+    
+    results = {}
+    
+    for i, (condition, spike_matrix) in enumerate(spike_data_dict.items()):
+        color = colors[i] if isinstance(colors, (list, tuple)) else colors
+        
+        # Plot PSTH for this condition
+        smoothed_psth, sem, _, _ = plot_spike_psth(
+            time_axis, spike_matrix, bin_size, kernel_width, kernel_type,
+            plot_error=True, color=color, ax=ax, alpha=0.2
+        )
+        
+        # Store results
+        results[condition] = {
+            'smoothed_psth': smoothed_psth,
+            'sem': sem,
+            'time_axis': time_axis,
+            'peak_rate': np.max(smoothed_psth),
+            'mean_rate': np.mean(smoothed_psth),
+            'n_trials': spike_matrix.shape[0]
+        }
+        
+        # Add to legend
+        ax.plot([], [], color=color, linewidth=3, alpha=0.9, 
+               label=f'{condition} (n={spike_matrix.shape[0]})')
+    
+    ax.legend()
+    ax.set_title(f'Multi-Condition PSTH Comparison\n{kernel_type} kernel (σ={kernel_width*1000:.1f}ms)')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return results
+
+
+def create_psth_from_spike_times(spike_times_list, time_window, bin_size, 
+                                align_time=0.0, kernel_width=0.025, kernel_type='gauss'):
+    """
+    Create PSTH from spike times with advanced kernel smoothing.
+    
+    Parameters:
+    -----------
+    spike_times_list : list
+        List of spike time arrays (one per trial)
+    time_window : tuple
+        (start_time, end_time) for the analysis window
+    bin_size : float
+        Bin size in seconds
+    align_time : float
+        Time to align to (subtracted from all spike times)
+    kernel_width : float
+        Width of the smoothing kernel
+    kernel_type : str
+        Type of kernel ('gauss', 'halfgauss', 'exp', 'epsp')
+        
+    Returns:
+    --------
+    tuple
+        (time_axis, spike_matrix, smoothed_psth, sem) - ready for plotting
+    """
+    # Create time axis
+    time_bins = np.arange(time_window[0], time_window[1] + bin_size, bin_size)
+    time_axis = time_bins[:-1] + bin_size / 2
+    
+    # Create spike matrix
+    spike_matrix = np.zeros((len(spike_times_list), len(time_axis)))
+    
+    for i, spike_times in enumerate(spike_times_list):
+        if len(spike_times) > 0:
+            # Align spike times
+            aligned_spikes = spike_times - align_time
+            
+            # Only include spikes within the time window
+            valid_spikes = aligned_spikes[
+                (aligned_spikes >= time_window[0]) & 
+                (aligned_spikes <= time_window[1])
+            ]
+            
+            if len(valid_spikes) > 0:
+                # Create histogram
+                counts, _ = np.histogram(valid_spikes, bins=time_bins)
+                spike_matrix[i, :] = counts
+    
+    # Apply kernel smoothing
+    smoothed_psth, sem, _, _ = plot_spike_psth(
+        time_axis, spike_matrix, bin_size, kernel_width, kernel_type,
+        plot_error=False, ax=None
+    )
+    
+    return time_axis, spike_matrix, smoothed_psth, sem

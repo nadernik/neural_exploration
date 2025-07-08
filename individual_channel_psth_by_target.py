@@ -237,10 +237,17 @@ class IndividualChannelPSTHAnalyzer:
                 mean_psth = np.mean(padded_psths, axis=0)
                 sem_psth = np.std(padded_psths, axis=0) / np.sqrt(len(padded_psths))
                 
-                # Apply Gaussian smoothing
-                sigma_bins = GAUSSIAN_SIGMA / PSTH_BIN_SIZE
-                smoothed_psth = gaussian_filter1d(mean_psth, sigma=sigma_bins)
-                smoothed_sem = gaussian_filter1d(sem_psth, sigma=sigma_bins)
+                # Apply advanced kernel smoothing using utils visualization
+                from utils.visualization import plot_spike_psth
+                
+                # Create spike matrix from trial PSTHs
+                spike_matrix = np.array(padded_psths)
+                
+                # Use the advanced PSTH plotting function
+                smoothed_psth, smoothed_sem, _, _ = plot_spike_psth(
+                    time_centers, spike_matrix, PSTH_BIN_SIZE, GAUSSIAN_SIGMA,
+                    kernel_type='gauss', plot_error=False, ax=None
+                )
                 
                 # Trim to match time_centers length
                 if len(smoothed_psth) > len(time_centers):
@@ -384,7 +391,8 @@ class IndividualChannelPSTHAnalyzer:
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         print(f"   ✅ Plot saved as: {output_path}")
         
-        plt.show()
+        # plt.show()  # Suppressed to avoid displaying figures
+        plt.close()  # Close figure to free memory
     
     def plot_target_comparison_per_channel(self, figsize: Tuple[int, int] = (20, 25)) -> None:
         """
@@ -480,7 +488,8 @@ class IndividualChannelPSTHAnalyzer:
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         print(f"   ✅ Plot saved as: {output_path}")
         
-        plt.show()
+        # plt.show()  # Suppressed to avoid displaying figures
+        plt.close()  # Close figure to free memory
     
     def print_summary_statistics(self) -> None:
         """Print summary statistics for all targets and channels."""

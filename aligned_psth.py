@@ -310,11 +310,20 @@ class AlignedPSTHAnalyzer:
         # Create histogram
         spike_counts, _ = np.histogram(valid_spikes, bins=time_bins)
         
-        # Convert to firing rate
-        spike_density = spike_counts / PSTH_BIN_SIZE
-        
         # Time centers for plotting
         time_centers = time_bins[:-1] + PSTH_BIN_SIZE / 2
+        
+        # Use advanced PSTH smoothing from utils.visualization
+        from utils.visualization import plot_spike_psth
+        
+        # Create spike matrix (single trial)
+        spike_matrix = np.array([spike_counts])
+        
+        # Apply advanced kernel smoothing
+        spike_density, _, _, _ = plot_spike_psth(
+            time_centers, spike_matrix, PSTH_BIN_SIZE, GAUSSIAN_SIGMA,
+            kernel_type='gauss', plot_error=False, ax=None
+        )
         
         return time_centers, spike_density
     
