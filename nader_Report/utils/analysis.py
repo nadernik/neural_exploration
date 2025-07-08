@@ -497,7 +497,21 @@ class SpikeAnalyzer:
             from scipy.interpolate import interp1d
             
             if 'behavioral_timestamps' in trial_data:
-                behavioral_time = trial_data['behavioral_timestamps']
+                behavioral_timestamps = trial_data['behavioral_timestamps']
+                
+                # Convert absolute timestamps to relative time
+                # Check if timestamps are absolute (Unix epoch) and convert to relative
+                if behavioral_timestamps.max() > 1000000:  # Likely Unix timestamp
+                    # Get trial start time
+                    if 'metadata' in trial_data and 'start_seconds' in trial_data['metadata']:
+                        trial_start = trial_data['metadata']['start_seconds']
+                        if trial_start < 1000000:  # start_seconds is relative, use first timestamp
+                            trial_start = behavioral_timestamps[0]
+                    else:
+                        trial_start = behavioral_timestamps[0]
+                    behavioral_time = behavioral_timestamps - trial_start
+                else:
+                    behavioral_time = behavioral_timestamps
             else:
                 behavioral_time = np.linspace(0, duration, len(velocity_magnitude))
             

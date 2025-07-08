@@ -183,8 +183,23 @@ class NeuralBehavioralAligner:
         velocity_x = trial_data['velocity_x']
         velocity_y = trial_data['velocity_y']
         behavioral_timestamps = trial_data['behavioral_timestamps']
+        
+        # Convert absolute timestamps to relative time
+        # Check if timestamps are absolute (Unix epoch) and convert to relative
+        if behavioral_timestamps.max() > 1000000:  # Likely Unix timestamp
+            # Get trial start time
+            if 'start_seconds' in trial_data.get('metadata', {}):
+                trial_start = trial_data['metadata']['start_seconds']
+                if trial_start < 1000000:  # start_seconds is relative, use first timestamp
+                    trial_start = behavioral_timestamps[0]
+            else:
+                trial_start = behavioral_timestamps[0]
+            behavioral_time = behavioral_timestamps - trial_start
+        else:
+            behavioral_time = behavioral_timestamps
+        
         duration = trial_data['metadata'].get('duration', 
-                                             behavioral_timestamps[-1] - behavioral_timestamps[0])
+                                             behavioral_time[-1] - behavioral_time[0])
         
         # Create time bins
         time_bins = self.create_time_bins(duration)
@@ -194,14 +209,14 @@ class NeuralBehavioralAligner:
         
         # Interpolate velocity_x
         if len(velocity_x) > 1:
-            interp_func_x = interpolate.interp1d(behavioral_timestamps, velocity_x,
+            interp_func_x = interpolate.interp1d(behavioral_time, velocity_x,
                                                kind=self.interpolation_method,
                                                bounds_error=False, fill_value=0)
             behavioral_data[:, 0] = interp_func_x(time_bins)
         
         # Interpolate velocity_y
         if len(velocity_y) > 1:
-            interp_func_y = interpolate.interp1d(behavioral_timestamps, velocity_y,
+            interp_func_y = interpolate.interp1d(behavioral_time, velocity_y,
                                                kind=self.interpolation_method,
                                                bounds_error=False, fill_value=0)
             behavioral_data[:, 1] = interp_func_y(time_bins)
