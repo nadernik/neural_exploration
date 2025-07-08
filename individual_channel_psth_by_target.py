@@ -22,26 +22,28 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import h5py
 from pathlib import Path
-from scipy import signal
 from scipy.ndimage import gaussian_filter1d
 from collections import defaultdict
 import seaborn as sns
 from typing import Dict, List, Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
+import sys
+
+# Add utils to path
+sys.path.append(str(Path(__file__).parent / 'utils'))
+from spike_detection import SpikeDetector
 
 # Configuration
 SPIKE_CHANNELS = [0, 1, 2, 3, 6, 32, 39, 40, 41, 42, 46, 49, 53, 67, 68, 73, 74, 75, 76, 77, 84]
 SAMPLING_RATE = 30000  # Hz
 PSTH_BIN_SIZE = 0.01  # seconds (10ms bins)
 GAUSSIAN_SIGMA = 0.025  # seconds (25ms smoothing)
-THRESHOLD_MULTIPLIER = -4.0  # Spike detection threshold
+THRESHOLD_MULTIPLIER = 4.0  # Spike detection threshold (now positive for utils)
 H5_FILE_PATH = r"D:\Data\ScienceCorp\trials_aligned.h5"
 
-# Filter parameters
-SPIKE_BAND_LOW = 400    # Hz
-SPIKE_BAND_HIGH = 6000  # Hz
-FILTER_ORDER = 4
+# Note: Filter parameters are now handled by utils.spike_detection.SpikeDetector
+# Default: 300-3000 Hz bandpass, 500 Hz highpass for artifact removal
 
 class IndividualChannelPSTHAnalyzer:
     """
@@ -64,6 +66,14 @@ class IndividualChannelPSTHAnalyzer:
         self.trial_data = {}
         self.target_trials = defaultdict(list)
         self.psth_data = {}
+        
+        # Initialize spike detector using utils version
+        self.spike_detector = SpikeDetector(
+            sampling_rate=SAMPLING_RATE,
+            threshold_factor=THRESHOLD_MULTIPLIER,  # Now positive
+            spike_window=(-10, 32),  # Default window from utils
+            good_channels=spike_channels
+        )
         
         print(f"🧠 Individual Channel PSTH Analyzer initialized")
         print(f"   • H5 file: {h5_file_path}")
@@ -127,53 +137,29 @@ class IndividualChannelPSTHAnalyzer:
         for target_idx, trials in self.target_trials.items():
             print(f"   • Target {target_idx}: {len(trials)} trials")
     
-    def detect_spikes_channel(self, signal_data: np.ndarray) -> np.ndarray:
+    def detect_spikes_channel(self, signal_data: np.ndarray, channel_idx: int) -> np.ndarray:
         """
-        Detect spikes in a single channel using threshold-based detection.
+        Detect spikes in a single channel using utils.spike_detection.
         
         Parameters:
         -----------
         signal_data : np.ndarray
             Raw neural signal data
+        channel_idx : int
+            Channel index for reference
             
         Returns:
         --------
         np.ndarray
             Array of spike times in seconds
         """
-        # Apply bandpass filter
-        nyquist = SAMPLING_RATE / 2
-        low = SPIKE_BAND_LOW / nyquist
-        high = SPIKE_BAND_HIGH / nyquist
+        # Use utils spike detector for single channel
+        spike_times, _ = self.spike_detector.detect_spikes_channel(signal_data)
         
-        try:
-            b, a = signal.butter(FILTER_ORDER, [low, high], btype='band')
-            filtered_signal = signal.filtfilt(b, a, signal_data)
-        except:
-            filtered_signal = signal_data
+        # Convert from sample indices to time
+        spike_times_seconds = spike_times / SAMPLING_RATE
         
-        # Calculate threshold
-        threshold = THRESHOLD_MULTIPLIER * np.sqrt(np.mean(filtered_signal**2))
-        
-        # Find threshold crossings (negative-going spikes)
-        spike_indices = np.where((filtered_signal[:-1] > threshold) & 
-                                (filtered_signal[1:] <= threshold))[0]
-        
-        # Remove duplicates within refractory period (1ms)
-        if len(spike_indices) > 0:
-            refractory_samples = int(0.001 * SAMPLING_RATE)  # 1ms refractory period
-            clean_spikes = [spike_indices[0]]
-            
-            for spike_idx in spike_indices[1:]:
-                if spike_idx - clean_spikes[-1] > refractory_samples:
-                    clean_spikes.append(spike_idx)
-            
-            spike_indices = np.array(clean_spikes)
-        
-        # Convert to time
-        spike_times = spike_indices / SAMPLING_RATE
-        
-        return spike_times
+        return spike_times_seconds
     
     def calculate_psth_for_target(self, target_index: int) -> Dict[int, Dict]:
         """
@@ -223,7 +209,7 @@ class IndividualChannelPSTHAnalyzer:
                     continue
                 
                 # Detect spikes for this channel in this trial
-                spike_times = self.detect_spikes_channel(neural_data[channel, :])
+                spike_times = self.detect_spikes_channel(neural_data[channel, :], channel)
                 
                 # Only include spikes within the trial duration
                 trial_duration = trial_data['duration']

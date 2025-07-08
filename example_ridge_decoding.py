@@ -28,8 +28,8 @@ from utils.h5_data_loader import H5DataLoader
 # File paths
 H5_FILE_PATH = r"D:\Data\ScienceCorp\trials_aligned.h5"  # Update this path
 
-# Analysis parameters - EXACT SAME AS WORKING NOTEBOOK
-GOOD_CHANNELS = [0, 1, 2, 3, 6, 32, 39, 40, 41, 42, 46, 49, 53, 67, 68, 73, 74, 75, 76, 77, 84]
+# Analysis parameters - MODIFIED TO USE ALL 96 CHANNELS
+GOOD_CHANNELS = list(range(96))  # All 96 channels (0-95)
 TRIAL_NUMBERS = list(range(1, 21))  # Use first 20 trials (same as working notebook)
 BIN_SIZE = 0.05  # 50ms bins (same as working notebook)
 THRESHOLD_FACTOR = 5.0
@@ -47,9 +47,10 @@ print("=" * 60)
 print(f"📋 Configuration:")
 print(f"  • Trials: {len(TRIAL_NUMBERS)} (trials {TRIAL_NUMBERS[0]}-{TRIAL_NUMBERS[-1]})")
 print(f"  • Bin size: {BIN_SIZE*1000:.0f}ms")
-print(f"  • Channels: {len(GOOD_CHANNELS)}")
+print(f"  • Channels: {len(GOOD_CHANNELS)} (ALL 96 CHANNELS)")
 print(f"  • Alpha range: {ALPHA_RANGE[0]}-{ALPHA_RANGE[-1]}")
 print(f"  • CV folds: {CV_FOLDS}")
+print(f"  ⚠️  Note: Using all 96 channels will increase processing time and memory usage")
 
 # =============================================================================
 # STEP 1: Initialize Components
@@ -176,10 +177,133 @@ print(f"  • Correlation velocity_y: {final_training_results['correlation_y']:.
 print(f"  • Speed correlation: {final_training_results['overall_correlation']:.3f}")
 
 # =============================================================================
-# STEP 5: Cross-Validation Evaluation
+# STEP 4.5: Channel Selection Based on Feature Importance
 # =============================================================================
 
-print(f"\n📈 Step 5: Cross-validation evaluation")
+print(f"\n🔍 Step 4.5: Select top channels based on feature importance")
+
+# Get regression coefficients for each velocity dimension
+coef_x = np.abs(final_decoder.model_x.coef_)  # Absolute values for importance
+coef_y = np.abs(final_decoder.model_y.coef_)
+
+# Find top 20 channels for each dimension
+top_channels_x = np.argsort(coef_x)[-20:][::-1]  # Top 20 for velocity_x
+top_channels_y = np.argsort(coef_y)[-20:][::-1]  # Top 20 for velocity_y
+
+# Combine and remove duplicates while preserving order
+combined_channels = []
+seen = set()
+
+# Add channels from velocity_x first (in order of importance)
+for ch in top_channels_x:
+    if ch not in seen:
+        combined_channels.append(ch)
+        seen.add(ch)
+
+# Add channels from velocity_y that weren't already included
+for ch in top_channels_y:
+    if ch not in seen:
+        combined_channels.append(ch)
+        seen.add(ch)
+
+# Sort the final channel list for consistency
+selected_channels = sorted(combined_channels)
+
+print(f"📊 Channel Selection Results:")
+print(f"  • Top 20 channels for velocity_x: {sorted(top_channels_x.tolist())}")
+print(f"  • Top 20 channels for velocity_y: {sorted(top_channels_y.tolist())}")
+print(f"  • Combined unique channels: {len(selected_channels)} channels")
+print(f"  • Selected channels: {selected_channels}")
+
+# Show feature importance for top channels
+print(f"\n📈 Feature Importance (Top 10 channels):")
+print(f"{'Channel':<8} {'Vel_X Coef':<12} {'Vel_Y Coef':<12} {'Combined':<12}")
+print(f"{'-'*8} {'-'*12} {'-'*12} {'-'*12}")
+
+for i, ch in enumerate(selected_channels[:10]):  # Show top 10
+    coef_x_val = coef_x[ch]
+    coef_y_val = coef_y[ch]
+    combined_importance = coef_x_val + coef_y_val
+    print(f"{ch:<8} {coef_x_val:<12.4f} {coef_y_val:<12.4f} {combined_importance:<12.4f}")
+
+# =============================================================================
+# STEP 5: Re-train with Selected Channels
+# =============================================================================
+
+print(f"\n🔄 Step 5: Re-train decoder with {len(selected_channels)} selected channels")
+
+# Extract features for selected channels only
+print("Extracting features for selected channels...")
+selected_neural_features = neural_features_all[:, selected_channels]
+
+print(f"📊 Selected feature matrix:")
+print(f"  • Original shape: {neural_features_all.shape}")
+print(f"  • Selected shape: {selected_neural_features.shape}")
+print(f"  • Reduction: {neural_features_all.shape[1]} → {selected_neural_features.shape[1]} channels")
+
+# Train new decoder with selected channels
+print(f"Training optimized decoder...")
+optimized_decoder = RidgeVelocityDecoder(
+    alpha=best_alpha,
+    normalize_features=True,
+    normalize_targets=False
+)
+
+optimized_training_results = optimized_decoder.train(
+    selected_neural_features, 
+    behavioral_targets_all,
+    test_size=TEST_SIZE,
+    random_state=42
+)
+
+print(f"✅ Optimized model trained:")
+print(f"  • R² velocity_x: {optimized_training_results['r2_x']:.3f}")
+print(f"  • R² velocity_y: {optimized_training_results['r2_y']:.3f}")
+print(f"  • Correlation velocity_x: {optimized_training_results['correlation_x']:.3f}")
+print(f"  • Correlation velocity_y: {optimized_training_results['correlation_y']:.3f}")
+print(f"  • Speed correlation: {optimized_training_results['overall_correlation']:.3f}")
+
+# =============================================================================
+# STEP 6: Performance Comparison
+# =============================================================================
+
+print(f"\n📈 Step 6: Performance comparison")
+
+print(f"📊 Performance Comparison:")
+selected_ch_header = f"Top {len(selected_channels)} Ch"
+print(f"{'Metric':<20} {'All 96 Ch':<12} {selected_ch_header:<12} {'Improvement':<12}")
+print(f"{'-'*20} {'-'*12} {'-'*12} {'-'*12}")
+
+# R² comparison
+r2_x_improvement = optimized_training_results['r2_x'] - final_training_results['r2_x']
+r2_y_improvement = optimized_training_results['r2_y'] - final_training_results['r2_y']
+corr_x_improvement = optimized_training_results['correlation_x'] - final_training_results['correlation_x']
+corr_y_improvement = optimized_training_results['correlation_y'] - final_training_results['correlation_y']
+overall_improvement = optimized_training_results['overall_correlation'] - final_training_results['overall_correlation']
+
+print(f"{'R² Velocity X':<20} {final_training_results['r2_x']:<12.3f} {optimized_training_results['r2_x']:<12.3f} {r2_x_improvement:+.3f}")
+print(f"{'R² Velocity Y':<20} {final_training_results['r2_y']:<12.3f} {optimized_training_results['r2_y']:<12.3f} {r2_y_improvement:+.3f}")
+print(f"{'Corr Velocity X':<20} {final_training_results['correlation_x']:<12.3f} {optimized_training_results['correlation_x']:<12.3f} {corr_x_improvement:+.3f}")
+print(f"{'Corr Velocity Y':<20} {final_training_results['correlation_y']:<12.3f} {optimized_training_results['correlation_y']:<12.3f} {corr_y_improvement:+.3f}")
+print(f"{'Overall Corr':<20} {final_training_results['overall_correlation']:<12.3f} {optimized_training_results['overall_correlation']:<12.3f} {overall_improvement:+.3f}")
+
+# Cross-validation with selected channels
+print(f"\n🔄 Cross-validation with selected channels...")
+optimized_cv_results = optimized_decoder.cross_validate(
+    selected_neural_features, 
+    behavioral_targets_all, 
+    cv_folds=CV_FOLDS
+)
+
+print(f"✅ Optimized cross-validation complete:")
+print(f"  • CV R² velocity_x: {optimized_cv_results['mean_r2_x']:.3f} ± {optimized_cv_results['std_r2_x']:.3f}")
+print(f"  • CV R² velocity_y: {optimized_cv_results['mean_r2_y']:.3f} ± {optimized_cv_results['std_r2_y']:.3f}")
+
+# =============================================================================
+# STEP 7: Cross-Validation Evaluation (Original)
+# =============================================================================
+
+print(f"\n📈 Step 7: Cross-validation evaluation (all channels)")
 
 # Perform cross-validation on the final model
 cv_results = final_decoder.cross_validate(
@@ -193,13 +317,13 @@ print(f"  • CV R² velocity_x: {cv_results['mean_r2_x']:.3f} ± {cv_results['s
 print(f"  • CV R² velocity_y: {cv_results['mean_r2_y']:.3f} ± {cv_results['std_r2_y']:.3f}")
 
 # =============================================================================
-# STEP 6: Visualization
+# STEP 8: Visualization
 # =============================================================================
 
-print(f"\n📊 Step 6: Generate visualizations")
+print(f"\n📊 Step 8: Generate visualizations")
 
-# Get test data from final training results
-X_test, y_test, y_pred = final_training_results['test_data']
+# Use the optimized model results for visualization
+X_test, y_test, y_pred = optimized_training_results['test_data']
 
 # Debug: Check data shapes and ranges
 print(f"📋 Debug - Data shapes:")
@@ -223,8 +347,8 @@ if y_test.shape[0] <= 5:
     
     # Fallback: Use all data for plotting
     print("  • Generating predictions for all data...")
-    y_pred_all = final_decoder.predict(neural_features_all)
-    X_test, y_test, y_pred = neural_features_all, behavioral_targets_all, y_pred_all
+    y_pred_all = optimized_decoder.predict(selected_neural_features)
+    X_test, y_test, y_pred = selected_neural_features, behavioral_targets_all, y_pred_all
     
     print(f"  • Updated to use all {y_test.shape[0]} samples for plotting")
     
@@ -260,7 +384,7 @@ axes[0, 0].plot([y_test[:, 0].min(), y_test[:, 0].max()],
                 [y_test[:, 0].min(), y_test[:, 0].max()], 'r--', lw=2)
 axes[0, 0].set_xlabel('True Velocity X')
 axes[0, 0].set_ylabel('Predicted Velocity X')
-axes[0, 0].set_title(f'Velocity X (R² = {final_training_results["r2_x"]:.3f})')
+axes[0, 0].set_title(f'Velocity X (R² = {optimized_training_results["r2_x"]:.3f}) - Top {len(selected_channels)} Ch')
 axes[0, 0].grid(True, alpha=0.3)
 
 # Plot 2: Velocity Y
@@ -269,7 +393,7 @@ axes[0, 1].plot([y_test[:, 1].min(), y_test[:, 1].max()],
                 [y_test[:, 1].min(), y_test[:, 1].max()], 'r--', lw=2)
 axes[0, 1].set_xlabel('True Velocity Y')
 axes[0, 1].set_ylabel('Predicted Velocity Y')
-axes[0, 1].set_title(f'Velocity Y (R² = {final_training_results["r2_y"]:.3f})')
+axes[0, 1].set_title(f'Velocity Y (R² = {optimized_training_results["r2_y"]:.3f}) - Top {len(selected_channels)} Ch')
 axes[0, 1].grid(True, alpha=0.3)
 
 # Plot 3: Speed comparison
@@ -281,7 +405,7 @@ axes[1, 0].plot([true_speed.min(), true_speed.max()],
                 [true_speed.min(), true_speed.max()], 'r--', lw=2)
 axes[1, 0].set_xlabel('True Speed')
 axes[1, 0].set_ylabel('Predicted Speed')
-axes[1, 0].set_title(f'Speed (r = {final_training_results["overall_correlation"]:.3f})')
+axes[1, 0].set_title(f'Speed (r = {optimized_training_results["overall_correlation"]:.3f}) - Top {len(selected_channels)} Ch')
 axes[1, 0].grid(True, alpha=0.3)
 
 # Plot 4: Hyperparameter results
@@ -297,14 +421,14 @@ axes[1, 1].grid(True, alpha=0.3)
 
 plt.tight_layout()
 print("Saving plot...")
-plt.savefig('example_ridge_decoding_results.png', dpi=300, bbox_inches='tight')
-print("Plot saved to example_ridge_decoding_results.png")
+plt.savefig('example_ridge_decoding_optimized_results.png', dpi=300, bbox_inches='tight')
+print("Plot saved to example_ridge_decoding_optimized_results.png")
 print("Displaying plot...")
 plt.show(block=True)  # Use block=True to ensure plot displays
 print("Plot displayed")
 
 # =============================================================================
-# STEP 7: Summary
+# STEP 9: Summary
 # =============================================================================
 
 print(f"\n" + "="*60)
@@ -318,15 +442,27 @@ print(f"  • Behavioral targets: {behavioral_targets_all.shape}")
 print(f"  • Time bins: {neural_features_all.shape[0]}")
 print(f"  • Total duration: {neural_features_all.shape[0] * BIN_SIZE:.1f} seconds")
 
-print(f"\n🎯 Performance:")
+print(f"\n🧠 Channel Selection:")
+print(f"  • Started with: 96 channels")
+print(f"  • Top 20 for velocity_x: {len(top_channels_x)} channels")
+print(f"  • Top 20 for velocity_y: {len(top_channels_y)} channels")
+print(f"  • Combined selected: {len(selected_channels)} channels")
+print(f"  • Reduction: {96 - len(selected_channels)} channels removed")
+
+print(f"\n🎯 Performance (Optimized Model):")
 print(f"  • Best regularization: α = {best_alpha}")
-print(f"  • R² velocity_x: {final_training_results['r2_x']:.3f}")
-print(f"  • R² velocity_y: {final_training_results['r2_y']:.3f}")
-print(f"  • Correlation velocity_x: {final_training_results['correlation_x']:.3f}")
-print(f"  • Correlation velocity_y: {final_training_results['correlation_y']:.3f}")
-print(f"  • Speed correlation: {final_training_results['overall_correlation']:.3f}")
-print(f"  • CV R² velocity_x: {cv_results['mean_r2_x']:.3f} ± {cv_results['std_r2_x']:.3f}")
-print(f"  • CV R² velocity_y: {cv_results['mean_r2_y']:.3f} ± {cv_results['std_r2_y']:.3f}")
+print(f"  • R² velocity_x: {optimized_training_results['r2_x']:.3f}")
+print(f"  • R² velocity_y: {optimized_training_results['r2_y']:.3f}")
+print(f"  • Correlation velocity_x: {optimized_training_results['correlation_x']:.3f}")
+print(f"  • Correlation velocity_y: {optimized_training_results['correlation_y']:.3f}")
+print(f"  • Speed correlation: {optimized_training_results['overall_correlation']:.3f}")
+print(f"  • CV R² velocity_x: {optimized_cv_results['mean_r2_x']:.3f} ± {optimized_cv_results['std_r2_x']:.3f}")
+print(f"  • CV R² velocity_y: {optimized_cv_results['mean_r2_y']:.3f} ± {optimized_cv_results['std_r2_y']:.3f}")
+
+print(f"\n📈 Comparison (96 Ch vs Top {len(selected_channels)} Ch):")
+print(f"  • R² velocity_x: {final_training_results['r2_x']:.3f} → {optimized_training_results['r2_x']:.3f} ({r2_x_improvement:+.3f})")
+print(f"  • R² velocity_y: {final_training_results['r2_y']:.3f} → {optimized_training_results['r2_y']:.3f} ({r2_y_improvement:+.3f})")
+print(f"  • Overall correlation: {final_training_results['overall_correlation']:.3f} → {optimized_training_results['overall_correlation']:.3f} ({overall_improvement:+.3f})")
 
 print(f"\n📈 Dataset Statistics:")
 print(f"  • Neural activity range: {np.min(neural_features_all):.2f} to {np.max(neural_features_all):.2f} Hz")
@@ -339,7 +475,7 @@ moving_samples = np.sum(speed_all > 0.01)
 print(f"  • Moving samples: {moving_samples}/{len(speed_all)} ({moving_samples/len(speed_all)*100:.1f}%)")
 
 print(f"\n🎉 Ridge decoding analysis complete!")
-print(f"📊 Results saved to: example_ridge_decoding_results.png")
+print(f"📊 Results saved to: example_ridge_decoding_optimized_results.png")
 
 # =============================================================================
 # OPTIONAL: Feature Importance Analysis
@@ -347,46 +483,50 @@ print(f"📊 Results saved to: example_ridge_decoding_results.png")
 
 print(f"\n🔍 Optional: Feature importance analysis")
 
-# Get model coefficients
-coef_x = final_decoder.model_x.coef_
-coef_y = final_decoder.model_y.coef_
+# Get model coefficients from optimized decoder
+coef_x_optimized = optimized_decoder.model_x.coef_
+coef_y_optimized = optimized_decoder.model_y.coef_
 
 # Calculate feature importance (absolute coefficients)
-importance_x = np.abs(coef_x)
-importance_y = np.abs(coef_y)
+importance_x_optimized = np.abs(coef_x_optimized)
+importance_y_optimized = np.abs(coef_y_optimized)
 
-# Plot feature importance
+# Plot feature importance for selected channels
 fig, axes = plt.subplots(1, 2, figsize=(15, 6))
 
 # Velocity X coefficients
-axes[0].bar(range(len(importance_x)), importance_x)
-axes[0].set_xlabel('Channel Index')
+axes[0].bar(range(len(importance_x_optimized)), importance_x_optimized)
+axes[0].set_xlabel('Selected Channel Index')
 axes[0].set_ylabel('|Coefficient|')
-axes[0].set_title('Feature Importance - Velocity X')
+axes[0].set_title(f'Feature Importance - Velocity X (Top {len(selected_channels)} Channels)')
 axes[0].grid(True, alpha=0.3)
 
 # Velocity Y coefficients
-axes[1].bar(range(len(importance_y)), importance_y)
-axes[1].set_xlabel('Channel Index')
+axes[1].bar(range(len(importance_y_optimized)), importance_y_optimized)
+axes[1].set_xlabel('Selected Channel Index')
 axes[1].set_ylabel('|Coefficient|')
-axes[1].set_title('Feature Importance - Velocity Y')
+axes[1].set_title(f'Feature Importance - Velocity Y (Top {len(selected_channels)} Channels)')
 axes[1].grid(True, alpha=0.3)
 
 plt.tight_layout()
 print("Saving feature importance plot...")
-plt.savefig('feature_importance.png', dpi=300, bbox_inches='tight')
-print("Feature importance plot saved to feature_importance.png")
+plt.savefig('feature_importance_optimized.png', dpi=300, bbox_inches='tight')
+print("Feature importance plot saved to feature_importance_optimized.png")
 print("Displaying feature importance plot...")
 plt.show(block=True)  # Use block=True to ensure plot displays
 print("Feature importance plot displayed")
 
-print(f"📊 Feature importance saved to: feature_importance.png")
+print(f"📊 Feature importance saved to: feature_importance_optimized.png")
 
-# Print top channels
-top_channels_x = np.argsort(importance_x)[-5:][::-1]
-top_channels_y = np.argsort(importance_y)[-5:][::-1]
+# Print top channels from selected channels
+top_idx_x = np.argsort(importance_x_optimized)[-5:][::-1]
+top_idx_y = np.argsort(importance_y_optimized)[-5:][::-1]
 
-print(f"\n🏆 Top 5 channels for velocity X: {[GOOD_CHANNELS[i] for i in top_channels_x]}")
-print(f"🏆 Top 5 channels for velocity Y: {[GOOD_CHANNELS[i] for i in top_channels_y]}")
+print(f"\n🏆 Top 5 selected channels for velocity X: {[selected_channels[i] for i in top_idx_x]}")
+print(f"🏆 Top 5 selected channels for velocity Y: {[selected_channels[i] for i in top_idx_y]}")
+
+# Also show the original top channels from all 96 channels
+print(f"🏆 Original top 5 channels for velocity X: {sorted(top_channels_x.tolist())[:5]}")
+print(f"🏆 Original top 5 channels for velocity Y: {sorted(top_channels_y.tolist())[:5]}")
 
 print(f"\n✅ Example ridge decoding complete!") 
