@@ -36,7 +36,7 @@ from h5_data_loader import H5DataLoader
 H5_FILE_PATH = r"D:\Data\ScienceCorp\trials_aligned.h5"
 
 # Trial to visualize
-TRIAL_NUMBER = 1
+TRIAL_NUMBER = 2
 
 # Spike detection parameters
 SAMPLING_RATE = 30000  # Hz
