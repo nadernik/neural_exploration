@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 from typing import Tuple, Dict, List, Optional
 import struct
+from utils.nsx_header_parser import get_time_origin, NSXHeaderParseError
 
 # Configure logging
 logging.basicConfig(
@@ -64,83 +65,25 @@ class PreciseTimeAligner:
         logger.info(f"Extracting Time Origin from {self.neural_file}")
         
         try:
-            # Initialize BlackrockIO
+            # Use the proper NSX header parser
+            time_origin = get_time_origin(self.neural_file)
+            logger.info(f"Successfully extracted Time Origin: {time_origin}")
+            
+            # Initialize BlackrockIO for other operations
             self.neural_io = BlackrockIO(filename=str(self.neural_file))
             
-            # Method 1: Try to access the raw header directly
-            try:
-                if hasattr(self.neural_io, '_get_nsx_header'):
-                    header = self.neural_io._get_nsx_header()
-                    if 'TimeOrigin' in header:
-                        time_origin = header['TimeOrigin']
-                        logger.info(f"Found TimeOrigin in _get_nsx_header: {time_origin}")
-                        
-                        # Convert to datetime if it's not already
-                        if isinstance(time_origin, str):
-                            time_origin = time_origin.rstrip('Z')
-                            return datetime.fromisoformat(time_origin)
-                        elif isinstance(time_origin, datetime):
-                            return time_origin
-                        else:
-                            logger.warning(f"Unknown TimeOrigin format: {type(time_origin)}")
-            except Exception as e:
-                logger.warning(f"_get_nsx_header method failed: {e}")
+            return time_origin
             
-            # Method 2: Try raw_annotations
-            try:
-                if hasattr(self.neural_io, 'raw_annotations') and self.neural_io.raw_annotations:
-                    annotations = self.neural_io.raw_annotations
-                    if 'Time Origin' in annotations:
-                        time_origin = annotations['Time Origin']
-                        logger.info(f"Found Time Origin in raw_annotations: {time_origin}")
-                        
-                        if isinstance(time_origin, str):
-                            time_origin = time_origin.rstrip('Z')
-                            return datetime.fromisoformat(time_origin)
-                        elif isinstance(time_origin, datetime):
-                            return time_origin
-            except Exception as e:
-                logger.warning(f"raw_annotations method failed: {e}")
-            
-            # Method 3: Try to parse the file header directly
-            try:
-                # Read the first few bytes of the file to extract header info
-                with open(self.neural_file, 'rb') as f:
-                    # NSx files have a specific header structure
-                    # This is a simplified approach - real implementation would need
-                    # to parse the complete NSx header format
-                    header_data = f.read(10000)  # Read first 10KB
-                    
-                    # Look for timestamp information in the header
-                    # This is a heuristic approach and may need adjustment
-                    logger.info("Attempting to parse raw header data...")
-                    
-                    # The exact parsing would depend on the NSx file format version
-                    # For now, we'll use a fallback approach
-                    
-            except Exception as e:
-                logger.warning(f"Raw header parsing failed: {e}")
-            
-            # Method 4: Try to read a small block and get timing info
-            try:
-                logger.info("Attempting to extract timing from data block...")
-                
-                # Check if we can use get_analogsignal_chunk to get timing info
-                if hasattr(self.neural_io, 'get_signal_t_start'):
-                    t_start = self.neural_io.get_signal_t_start(block_index=0, seg_index=0)
-                    logger.info(f"Signal t_start: {t_start}")
-                    
-                    # This gives us the relative start time, but we need the absolute time
-                    # We'll need to combine this with other information
-                    
-            except Exception as e:
-                logger.warning(f"Data block timing extraction failed: {e}")
-            
-            # If all methods fail, we need to make an educated guess
-            # Based on the behavioral data timing
-            logger.warning("Could not extract Time Origin from neural file header")
+        except NSXHeaderParseError as e:
+            logger.error(f"Failed to extract Time Origin from NSX header: {e}")
             logger.info("Will attempt to estimate based on behavioral data timing")
             
+            # Initialize BlackrockIO for other operations
+            try:
+                self.neural_io = BlackrockIO(filename=str(self.neural_file))
+            except Exception as init_error:
+                logger.error(f"Failed to initialize BlackrockIO: {init_error}")
+                
             return None
             
         except Exception as e:

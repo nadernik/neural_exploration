@@ -67,15 +67,25 @@ Thumbs.db
 *.npy
 *.npz 
 
-.png
-.pdf
-.jpg
-.jpeg
-.gif
-.bmp
-.tiff
-.ico
-.webp
-.svg
+*.png
+*.pdf
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.ico
+*.webp
+*.svg
+*.eps
+*.pdf
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.ico
+*.webp
+*.svg
 
 *.csv

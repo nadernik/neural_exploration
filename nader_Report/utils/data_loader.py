@@ -17,6 +17,9 @@ except ImportError:
     NEO_AVAILABLE = False
     print("Neo library not available. Please install with: pip install neo")
 
+# Import the new NSX header parser
+from .nsx_header_parser import parse_nsx_header, get_time_origin, NSXHeaderParseError
+
 
 class DataLoader:
     """
@@ -308,30 +311,15 @@ class DataLoader:
             # Create Neo reader for Blackrock files
             reader = neo.BlackrockIO(filename=file_path)
             
-            # First, get basic file info without loading data
+                        # Extract time origin from NSX header
             try:
-                # Get Time Origin from the reader metadata
-                if hasattr(reader, 'datetime'):
-                    self.time_origin = reader.datetime
-                elif hasattr(reader, 'rec_datetime'):
-                    self.time_origin = reader.rec_datetime
-                else:
-                    # Try to get from header
-                    try:
-                        if hasattr(reader, 'header'):
-                            self.time_origin = reader.header.get('datetime', None)
-                        elif hasattr(reader, '_read_header'):
-                            header = reader._read_header()
-                            self.time_origin = header.get('datetime', None)
-                    except:
-                        pass
-                
-                # If no time origin found, use a default
-                if self.time_origin is None:
-                    print("Warning: Could not extract Time Origin from .ns6 file. Using provided timestamp.")
-                    self.time_origin = datetime(2025, 3, 25, 9, 22, 53, tzinfo=timezone.utc)
-                
-                print(f"Neural data Time Origin: {self.time_origin}")
+                print("📅 Extracting time origin from NSX header...")
+                self.time_origin = get_time_origin(file_path)
+                print(f"✅ Time origin extracted: {self.time_origin}")
+            except NSXHeaderParseError as e:
+                print(f"❌ Failed to extract time origin from NSX header: {e}")
+                print("⚠️  Cannot proceed without time origin - this is required for alignment")
+                return None
                 
                 # Get basic file info
                 header = reader.header
@@ -844,16 +832,12 @@ class DataLoader:
             
             # Get Time Origin
             try:
-                if hasattr(reader, 'datetime'):
-                    self.time_origin = reader.datetime
-                elif hasattr(reader, 'rec_datetime'):
-                    self.time_origin = reader.rec_datetime
-                else:
-                    self.time_origin = datetime(2025, 3, 25, 9, 22, 53, tzinfo=timezone.utc)
-            except:
-                self.time_origin = datetime(2025, 3, 25, 9, 22, 53, tzinfo=timezone.utc)
-            
-            print(f"Neural data Time Origin: {self.time_origin}")
+                self.time_origin = get_time_origin(file_path)
+                print(f"✅ Time origin extracted: {self.time_origin}")
+            except NSXHeaderParseError as e:
+                print(f"❌ Failed to extract time origin from NSX header: {e}")
+                print("⚠️  Cannot proceed without time origin - this is required for alignment")
+                return None
             
             # Read block in lazy mode to get proxies
             block = reader.read_block(lazy=True)
@@ -1086,16 +1070,12 @@ class DataLoader:
             
             # Get Time Origin
             try:
-                if hasattr(reader, 'datetime'):
-                    self.time_origin = reader.datetime
-                elif hasattr(reader, 'rec_datetime'):
-                    self.time_origin = reader.rec_datetime
-                else:
-                    self.time_origin = datetime(2025, 3, 25, 9, 22, 53, tzinfo=timezone.utc)
-            except:
-                self.time_origin = datetime(2025, 3, 25, 9, 22, 53, tzinfo=timezone.utc)
-            
-            print(f"Neural data Time Origin: {self.time_origin}")
+                self.time_origin = get_time_origin(file_path)
+                print(f"✅ Time origin extracted: {self.time_origin}")
+            except NSXHeaderParseError as e:
+                print(f"❌ Failed to extract time origin from NSX header: {e}")
+                print("⚠️  Cannot proceed without time origin - this is required for alignment")
+                return None
             
             # Load data using manual time slicing - BlackrockIO doesn't support time_slice parameter
             print("Loading data with manual time slicing...")

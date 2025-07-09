@@ -31,7 +31,7 @@ H5_FILE_PATH = r"D:\Data\ScienceCorp\trials_aligned.h5"  # Update this path
 # Analysis parameters - MODIFIED TO USE ALL 96 CHANNELS
 GOOD_CHANNELS = list(range(96))  # All 96 channels (0-95)
 TRIAL_NUMBERS = list(range(1, 21))  # Use first 20 trials (same as working notebook)
-BIN_SIZE = 0.05  # 50ms bins (same as working notebook)
+BIN_SIZE = 0.1  # 100ms bins
 THRESHOLD_FACTOR = 5.0
 SPIKE_WINDOW = (-10, 32)
 
