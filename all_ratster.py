@@ -7,12 +7,17 @@ This script creates a comprehensive visualization showing:
 2. Raster plot of neural spikes across all 96 channels below
 
 Usage:
+    # Single trial
     python all_ratster.py --trial 1 --h5_file "path/to/data.h5" --save "output.png"
+    
+    # Grand figure with multiple trials
+    python all_ratster.py --grand_figure --trials "1-10" --save "grand_figure.png"
 
 Features:
 - Handles all available channels (up to 96)
 - Spike detection across all channels
 - Combined behavioral and neural visualization
+- Grand figure mode for multiple trials (6x wider)
 - Configurable parameters
 - High-quality output with proper scaling
 """
@@ -41,14 +46,14 @@ from h5_data_loader import H5DataLoader
 DEFAULT_H5_FILE = r"D:\Data\ScienceCorp\trials_aligned.h5"
 
 # Default trial to visualize
-DEFAULT_TRIAL = 12
+DEFAULT_TRIAL = 10
 # Spike detection parameters
 SAMPLING_RATE = 30000  # Hz
-THRESHOLD_FACTOR = 4.0  # Spike detection threshold
+THRESHOLD_FACTOR = 5.0  # Spike detection threshold
 SPIKE_WINDOW = (-10, 32)  # samples around spike
 
 # Display parameters
-FIGURE_SIZE = (5, 15)  # Large figure for all channels
+FIGURE_SIZE = (3, 15)  # Large figure for all channels
 BEHAVIORAL_HEIGHT_RATIO = 3  # Height ratio for behavioral plot
 RASTER_HEIGHT_RATIO = 20  # Height ratio for raster plot
 SPIKE_MARKER_SIZE = 1  # Size of spike markers
@@ -210,7 +215,8 @@ def detect_spikes_all_channels(neural_data: np.ndarray,
 
 def create_all_channel_raster_plot(trial_data: Dict, spike_data: Dict[int, Dict],
                                   save_path: Optional[str] = None,
-                                  figsize: Tuple[float, float] = FIGURE_SIZE) -> None:
+                                  figsize: Tuple[float, float] = FIGURE_SIZE,
+                                  ax_behavior=None, ax_raster=None) -> None:
     """
     Create a comprehensive raster plot with behavioral data for all channels.
     
@@ -229,15 +235,20 @@ def create_all_channel_raster_plot(trial_data: Dict, spike_data: Dict[int, Dict]
     channels = sorted(spike_data.keys())
     n_channels = len(channels)
     
-    # Create figure with custom grid
-    fig = plt.figure(figsize=figsize)
-    gs = gridspec.GridSpec(2, 1, height_ratios=[BEHAVIORAL_HEIGHT_RATIO, RASTER_HEIGHT_RATIO],
-                          hspace=0.1)
+    # Create figure with custom grid (only if axes not provided)
+    if ax_behavior is None or ax_raster is None:
+        fig = plt.figure(figsize=figsize)
+        gs = gridspec.GridSpec(2, 1, height_ratios=[BEHAVIORAL_HEIGHT_RATIO, RASTER_HEIGHT_RATIO],
+                              hspace=0.1)
+        ax_behavior = fig.add_subplot(gs[0])
+        ax_raster = fig.add_subplot(gs[1])
+        standalone_plot = True
+    else:
+        standalone_plot = False
     
     # =========================================================================
     # TOP PANEL: BEHAVIORAL DATA
     # =========================================================================
-    ax_behavior = fig.add_subplot(gs[0])
     
     # Plot behavioral data if available
     if (trial_data['velocity_x'] is not None and 
@@ -300,7 +311,6 @@ def create_all_channel_raster_plot(trial_data: Dict, spike_data: Dict[int, Dict]
     # =========================================================================
     # BOTTOM PANEL: RASTER PLOT
     # =========================================================================
-    ax_raster = fig.add_subplot(gs[1])
     
     # Plot spikes for each channel
     print(f"🎯 Plotting spikes for {n_channels} channels...")
@@ -350,17 +360,123 @@ def create_all_channel_raster_plot(trial_data: Dict, spike_data: Dict[int, Dict]
                   fontsize=10, verticalalignment='top', 
                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     
-    # Tight layout
+    # Tight layout and save/show only for standalone plots
+    if standalone_plot:
+        plt.tight_layout()
+        
+        # Save or show plot
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"💾 Plot saved to: {save_path}")
+        else:
+            plt.show()
+        
+        print(f"✅ All-channel raster plot complete!")
+
+def create_grand_multi_trial_figure(h5_file_path: str, trial_numbers: List[int],
+                                  threshold_factor: float = THRESHOLD_FACTOR,
+                                  use_all_channels: bool = True,
+                                  save_path: Optional[str] = None) -> None:
+    """
+    Create a grand figure showing multiple trials in a grid layout.
+    
+    Args:
+        h5_file_path: Path to H5 file
+        trial_numbers: List of trial numbers to plot
+        threshold_factor: Threshold factor for spike detection
+        use_all_channels: Whether to use all channels or just good ones
+        save_path: Optional path to save the plot
+    """
+    n_trials = len(trial_numbers)
+    
+    # Calculate grid dimensions (prefer more columns than rows)
+    if n_trials <= 5:
+        n_cols = n_trials
+        n_rows = 1
+    elif n_trials <= 10:
+        n_cols = 5
+        n_rows = 2
+    else:
+        n_cols = int(np.ceil(np.sqrt(n_trials)))
+        n_rows = int(np.ceil(n_trials / n_cols))
+    
+    # Create grand figure (6 times wider)
+    grand_figsize = (FIGURE_SIZE[0] * 6, FIGURE_SIZE[1])
+    fig = plt.figure(figsize=grand_figsize)
+    
+    print(f"🎨 Creating grand figure with {n_trials} trials ({n_rows}x{n_cols} grid)")
+    print(f"📐 Figure size: {grand_figsize}")
+    
+    # Create main gridspec for overall layout
+    gs_main = gridspec.GridSpec(n_rows, n_cols, figure=fig, hspace=0.3, wspace=0.2)
+    
+    # Create subplots for each trial
+    for idx, trial_num in enumerate(trial_numbers):
+        print(f"\n📊 Processing trial {trial_num} ({idx+1}/{n_trials})...")
+        
+        # Load trial data
+        trial_data = load_trial_data(h5_file_path, trial_num)
+        if trial_data is None:
+            print(f"⚠️  Skipping trial {trial_num} - failed to load")
+            continue
+        
+        # Detect spikes
+        spike_data = detect_spikes_all_channels(
+            trial_data['neural_data'], 
+            threshold_factor=threshold_factor,
+            use_all_channels=use_all_channels
+        )
+        
+        # Create subplot grid for this trial (behavioral + raster)
+        gs_trial = gridspec.GridSpecFromSubplotSpec(
+            2, 1, 
+            subplot_spec=gs_main[idx],
+            height_ratios=[BEHAVIORAL_HEIGHT_RATIO, RASTER_HEIGHT_RATIO],
+            hspace=0.1
+        )
+        
+        ax_behavior = fig.add_subplot(gs_trial[0])
+        ax_raster = fig.add_subplot(gs_trial[1])
+        
+        # Create the plot for this trial
+        create_all_channel_raster_plot(
+            trial_data, 
+            spike_data,
+            ax_behavior=ax_behavior,
+            ax_raster=ax_raster
+        )
+        
+        # Adjust font sizes for smaller subplots
+        ax_behavior.tick_params(labelsize=6)
+        ax_raster.tick_params(labelsize=6)
+        
+        # Adjust title font size
+        ax_behavior.set_title(f'Trial {trial_num}', fontsize=8, fontweight='bold')
+        
+        # Remove some labels to reduce clutter
+        if idx % n_cols != 0:  # Not leftmost column
+            ax_behavior.set_ylabel('')
+            ax_raster.set_ylabel('')
+        
+        if idx < n_trials - n_cols:  # Not bottom row
+            ax_raster.set_xlabel('')
+    
+    # Add overall title
+    fig.suptitle('Multi-Trial Neural Activity Raster Plots', 
+                fontsize=16, fontweight='bold', y=0.98)
+    
+    # Adjust layout
     plt.tight_layout()
+    plt.subplots_adjust(top=0.95)
     
     # Save or show plot
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"💾 Plot saved to: {save_path}")
+        print(f"\n💾 Grand figure saved to: {save_path}")
     else:
         plt.show()
     
-    print(f"✅ All-channel raster plot complete!")
+    print(f"✅ Grand multi-trial figure complete!")
 
 def print_spike_summary(spike_data: Dict[int, Dict]) -> None:
     """Print a summary of spike detection results."""
@@ -412,49 +528,77 @@ def main():
                        help='Use only the predefined good channels (21 channels) for spike detection')
     parser.add_argument('--max_channels', type=int, default=96,
                        help='Maximum number of channels to plot (default: 96)')
+    parser.add_argument('--grand_figure', action='store_true',
+                       help='Create grand figure with multiple trials')
+    parser.add_argument('--trials', type=str, default='1-10',
+                       help='Trial range for grand figure (e.g., "1-10" or "1,3,5,7") (default: "1-10")')
     
     args = parser.parse_args()
     
     print(f"🧠 ALL-CHANNEL RASTER PLOT GENERATOR")
     print("=" * 50)
-    print(f"Trial: {args.trial}")
     print(f"H5 File: {args.h5_file}")
     print(f"Threshold: {args.threshold}x")
     print(f"Use all channels: {not args.good_channels_only}")
     print(f"Max channels: {args.max_channels}")
+    print(f"Grand figure: {args.grand_figure}")
     
-    # Load trial data
-    trial_data = load_trial_data(args.h5_file, args.trial)
-    if trial_data is None:
-        return
-    
-    # Detect spikes
-    spike_data = detect_spikes_all_channels(
-        trial_data['neural_data'], 
-        threshold_factor=args.threshold,
-        use_all_channels=not args.good_channels_only
-    )
-    
-    # Limit channels if requested
-    if len(spike_data) > args.max_channels:
-        # Keep top channels by spike count
-        channels_by_spikes = sorted(spike_data.keys(), 
-                                  key=lambda ch: spike_data[ch]['n_spikes'], 
-                                  reverse=True)
-        selected_channels = channels_by_spikes[:args.max_channels]
-        spike_data = {ch: spike_data[ch] for ch in selected_channels}
-        print(f"⚠️  Limited to top {args.max_channels} channels by spike count")
-    
-    # Print summary
-    print_spike_summary(spike_data)
-    
-    # Create plot
-    create_all_channel_raster_plot(
-        trial_data, 
-        spike_data, 
-        save_path=args.save,
-        figsize=FIGURE_SIZE
-    )
+    if args.grand_figure:
+        # Parse trial range
+        if '-' in args.trials:
+            # Range format: "1-10"
+            start, end = map(int, args.trials.split('-'))
+            trial_numbers = list(range(start, end + 1))
+        else:
+            # List format: "1,3,5,7"
+            trial_numbers = [int(x.strip()) for x in args.trials.split(',')]
+        
+        print(f"Trials: {trial_numbers}")
+        
+        # Create grand figure
+        create_grand_multi_trial_figure(
+            args.h5_file,
+            trial_numbers,
+            threshold_factor=args.threshold,
+            use_all_channels=not args.good_channels_only,
+            save_path=args.save
+        )
+    else:
+        # Single trial mode
+        print(f"Trial: {args.trial}")
+        
+        # Load trial data
+        trial_data = load_trial_data(args.h5_file, args.trial)
+        if trial_data is None:
+            return
+        
+        # Detect spikes
+        spike_data = detect_spikes_all_channels(
+            trial_data['neural_data'], 
+            threshold_factor=args.threshold,
+            use_all_channels=not args.good_channels_only
+        )
+        
+        # Limit channels if requested
+        if len(spike_data) > args.max_channels:
+            # Keep top channels by spike count
+            channels_by_spikes = sorted(spike_data.keys(), 
+                                      key=lambda ch: spike_data[ch]['n_spikes'], 
+                                      reverse=True)
+            selected_channels = channels_by_spikes[:args.max_channels]
+            spike_data = {ch: spike_data[ch] for ch in selected_channels}
+            print(f"⚠️  Limited to top {args.max_channels} channels by spike count")
+        
+        # Print summary
+        print_spike_summary(spike_data)
+        
+        # Create plot
+        create_all_channel_raster_plot(
+            trial_data, 
+            spike_data, 
+            save_path=args.save,
+            figsize=FIGURE_SIZE
+        )
 
 if __name__ == "__main__":
     main() 
