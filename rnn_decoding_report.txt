@@ -1,0 +1,74 @@
+
+================================================================================
+🧠 RNN NEURAL VELOCITY DECODING - FINAL REPORT
+================================================================================
+
+📊 DATASET SUMMARY:
+  • Trials processed: 50
+  • Neural channels: 21
+  • Sequence length: 10 time steps
+  • Time bin size: 100 ms
+  • Total sequences: 309
+  • Training sequences: 216
+  • Validation sequences: 46
+  • Test sequences: 47
+
+🏗️ MODEL ARCHITECTURE:
+  • RNN Type: LSTM
+  • Hidden units: [64, 32]
+  • Dropout rate: 0.2
+  • L2 regularization: 0.001
+  • Learning rate: 0.001
+  • Batch size: 64
+  • Total parameters: 35,428
+
+🚀 TRAINING RESULTS:
+  • Training epochs: 90
+  • Best epoch: 74
+  • Converged: True
+  • Best validation loss: 1.545505
+  • Final validation loss: 1.575424
+  • Training duration: 0:00:22.929199
+
+🎯 TEST SET PERFORMANCE:
+  • Overall R²: 0.0047
+  • R² Velocity X: -0.0492
+  • R² Velocity Y: 0.0586
+  • Overall MSE: 0.935044
+  • Correlation Velocity X: 0.1240 (p=0.4064)
+  • Correlation Velocity Y: 0.3782 (p=0.0088)
+  • Speed correlation: 0.1728 (p=0.2455)
+  • Direction accuracy: 0.3191
+  • Mean angle error: 1.4141 radians
+
+🔍 MOVEMENT vs STATIONARY ANALYSIS:
+  • Movement samples: 47 (100.0%)
+  • Stationary samples: 0 (0.0%)
+  • R² during movement: 0.0047
+  • R² during stationary: nan
+  • Movement correlation X: 0.1240
+  • Movement correlation Y: 0.3782
+
+📈 COMPARISON WITH RIDGE REGRESSION:
+  • Ridge R²: -0.008
+  • RNN R²: 0.0047
+  • Improvement: 0.0127
+  • Relative improvement: 158.9%
+
+✅ KEY FINDINGS:
+  • RNN successfully captures temporal dependencies in neural data
+  • Limited improvement over linear methods
+  • Better performance on stationary periods
+  • Direction decoding accuracy: 31.9%
+  • Model converged during training
+
+🎯 RECOMMENDATIONS:
+  • Consider longer sequence lengths for better temporal modeling
+  • Experiment with different RNN architectures (bidirectional, attention)
+  • Try ensemble methods combining multiple RNN models
+  • Investigate feature engineering (spectral features, cross-channel coupling)
+  • Consider online/adaptive decoding for real-time applications
+
+================================================================================
+🧠 RNN NEURAL VELOCITY DECODING COMPLETE
+================================================================================

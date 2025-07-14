@@ -89,3 +89,15 @@ Thumbs.db
 *.svg
 
 *.csv
+
+*.pkl
+*.h5
+*.hdf5
+*.mat
+*.npy
+*.npz
+*.png
+*.pdf
+*.jpg
+*.jpeg
+*.gif
